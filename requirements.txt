@@ -1,0 +1,12 @@
+demucs
+librosa
+soundfile
+pedalboard
+pyrubberband
+scipy
+numpy
+fastapi
+uvicorn
+python-multipart
+yt-dlp
+httpx

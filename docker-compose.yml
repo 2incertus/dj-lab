@@ -1,0 +1,27 @@
+services:
+  dj-lab:
+    build: .
+    image: dj-lab:latest
+    container_name: dj-lab
+    user: "1000:1000"
+    env_file:
+      - /home/ubuntu/config/dj-lab.env
+    environment:
+      HOME: /app/.container-home
+      TORCH_HOME: /app/.container-home/torch
+      XDG_CACHE_HOME: /app/.container-home/cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8127:8127"
+    volumes:
+      - /home/ubuntu/dj-lab:/app
+    mem_limit: 6g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

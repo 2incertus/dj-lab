@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dj-lab -- Brasil x Maquina</title>
+<meta name="theme-color" content="#f7f2e8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="dj-lab">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v=3">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png?v=3">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=3">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v=3">
+<link rel="manifest" href="/static/manifest.json?v=3">
+<meta property="og:site_name" content="dj-lab">
+<meta property="og:title" content="Brasil x Maquina &middot; dj-lab">
+<meta property="og:description" content="Brazilian roots pressed onto hypnotic techno frames. Seven blends, a crate, an intake engine and a playable mesa: lessons, jams, pressings.">
+<meta property="og:image" content="https://dj.library.icu/static/share-card.png?v=2">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://dj.library.icu">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://dj.library.icu/static/share-card.png?v=2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,600;9..144,900&family=Archivo:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=25">
+</head>
+<body>
+<header class="masthead reveal">
+  <div class="label-row">
+    <span class="stamp">DJ-LAB</span>
+    <span class="mast-nav">
+      <a class="btn-link" href="/mesa">a mesa &rarr;</a>
+      <span class="cat-no">RYZEN &middot; 8127 &middot; 44.1 kHz</span>
+    </span>
+  </div>
+  <h1>Brasil <span class="times">&times;</span> M&aacute;quina</h1>
+  <p class="subtitle">seven blends: psicodelia nordestina, berimbau, choro, Evinha, bai&atilde;o,
+     maracatu, atabaques. Pressed onto hypnotic, broken &amp; warehouse frames.</p>
+</header>
+
+<main>
+  <section id="blends" class="side-a reveal">
+    <div class="side-head">
+      <h2>Lado A &middot; The Blends</h2>
+      <span class="side-note">click a waveform to seek &middot; bed = techno frame alone &middot; blend = with source</span>
+    </div>
+    <ol id="blend-list"></ol>
+    <div id="auditions"></div>
+  </section>
+
+  <section id="crate" class="reveal">
+    <div class="side-head">
+      <h2>Lado B &middot; The Crate</h2>
+      <button class="ghost" data-action="analyze">re-analyze</button>
+    </div>
+    <div id="crate-table"></div>
+  </section>
+
+  <section id="intake" class="reveal">
+    <div class="side-head">
+      <h2>Lado C &middot; Intake</h2>
+      <span class="side-note">bring new source material into the crate</span>
+    </div>
+    <ol class="intake-steps">
+      <li><b>1</b> find a track: search your Spotify, browse your liked songs, or search YouTube directly</li>
+      <li><b>2</b> Spotify can't be ripped, so for a Spotify pick you choose which YouTube upload to grab</li>
+      <li><b>3</b> pull it onto a shelf: it downloads, gets analyzed (BPM &middot; key &middot; timing) and scored against all seven frames</li>
+    </ol>
+    <div id="now-playing"></div>
+    <div class="intake-bar">
+      <div class="intake-tabs">
+        <button class="tab active" data-intake="spotify">my spotify</button>
+        <button class="tab" data-intake="liked">liked songs</button>
+        <button class="tab" data-intake="youtube">youtube</button>
+      </div>
+      <input id="intake-q" type="search" placeholder="search your spotify: track, artist, album ...">
+      <button class="ghost" id="intake-go">search</button>
+    </div>
+    <div id="intake-context"></div>
+    <div id="intake-status"></div>
+    <div id="intake-results"></div>
+    <p class="side-note shelf-legend">shelves &middot; cosmic: pads &amp; psychedelia &middot;
+      rhythmic: full-band grooves &middot; lush: vocals &amp; strings &middot;
+      percussion: drums &amp; batucada</p>
+  </section>
+
+  <section id="engine" class="reveal">
+    <div class="side-head">
+      <h2>The Engine</h2>
+      <button class="ghost" data-action="engine">re-score pairings</button>
+    </div>
+    <p class="side-note" style="padding-top:8px">every source scored against every frame:
+      tempo cost (how far the warp stretches), key clarity, and spectral role fit.
+      100 = drop it in tonight. Hit <b>audition</b> on any pairing to press a quick
+      test of it: it appears under Auditions in Lado A, where you can adopt it into
+      the real blend or discard it.</p>
+    <div id="engine-list"></div>
+  </section>
+
+  <section id="escola" class="reveal">
+    <div class="side-head">
+      <h2>Lado D &middot; A Mesa</h2>
+      <a class="btn-link" href="/mesa">abrir a mesa &rarr;</a>
+    </div>
+    <p class="side-note" style="padding-top:8px">ten playable modules (rhythm, synths, keys,
+      warp, beatmatch, the duck, EQ, the voice, a virtual controller, a pedal looper) that jam
+      together on a live console: kill channels, record wavs, archive masters, press sessions.
+      Plus the stamped percurso and a library shelf.</p>
+    <div id="escola-teaser"></div>
+  </section>
+
+  <section id="refs" class="reveal">
+    <div class="side-head">
+      <h2>Refer&ecirc;ncias &middot; Twisted Universe</h2>
+      <span class="side-note">Kaan's crate, mapped against your taste + these frames</span>
+    </div>
+    <div id="ref-list" class="ref-cols"></div>
+  </section>
+
+  <section id="console-sec" class="reveal">
+    <div class="side-head">
+      <h2>Pressing Plant</h2>
+      <div class="actions">
+        <button class="ghost" data-action="beds">render beds</button>
+        <label class="upload-btn">upload source
+          <input type="file" id="file-input" multiple hidden>
+        </label>
+        <select id="folder-select">
+          <option value="cosmic">cosmic</option>
+          <option value="rhythmic" selected>rhythmic</option>
+          <option value="lush">lush</option>
+          <option value="percussion">percussion</option>
+        </select>
+      </div>
+    </div>
+    <pre id="console">idle.</pre>
+  </section>
+</main>
+
+<footer class="reveal">
+  <span>prototypes only: replace YouTube rips with vinyl or Bandcamp masters for keepers</span>
+  <span class="cat-no">~/dj-lab &middot; ./dj --help</span>
+</footer>
+
+<script src="/static/app.js?v=11"></script>
+<script src="/static/escola.js?v=18"></script>
+</body>
+</html>

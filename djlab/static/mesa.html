@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Mesa -- Brasil x Maquina</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23a34a24'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23f2ede2'/%3E%3Ccircle cx='16' cy='16' r='1.6' fill='%23a34a24'/%3E%3C/svg%3E">
+<meta property="og:title" content="A Mesa &middot; Brasil x Maquina">
+<meta property="og:description" content="Ten playable modules that jam together, a live console to kill channels and record wavs, a stamped curriculum with provas, an archive and a library shelf. Learn mixing, theory, DJing and synthesis by touching.">
+<meta property="og:image" content="https://dj.library.icu/static/share-card.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://dj.library.icu/static/share-card.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,600;9..144,900&family=Archivo:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v=25">
+</head>
+<body>
+<header class="masthead reveal">
+  <div class="label-row">
+    <span class="stamp">A MESA</span>
+    <span class="cat-no">DJ-LAB &middot; LADO D &middot; 44.1 kHz</span>
+  </div>
+  <h1>A Mesa</h1>
+  <p class="subtitle">the escola grew a console: ten playable modules, nineteen carimbos, ten
+    provas, taught by the same machines that press the blends. The modules play together: jam
+    them, float a voice on top, kill channels, record the mesa, archive your masters and press
+    your sessions. <a class="back-link" href="/">&larr; back to the pressing plant</a></p>
+</header>
+
+<main>
+  <section id="console" class="reveal">
+    <div class="side-head">
+      <h2>A Mesa</h2>
+      <span class="side-note">three surfaces, every station open and playing together:
+        <b>M&aacute;quinas</b> makes the groove, <b>Discos</b> works the crate and the voice,
+        <b>Mistura</b> beatmatches, carves and presses &middot; transport + recorder in the
+        AO VIVO strip &middot; headphones recommended</span>
+    </div>
+    <div id="modulos"></div>
+  </section>
+
+  <section id="arquivo" class="reveal">
+    <div class="side-head">
+      <h2>O Arquivo</h2>
+      <span class="side-note">masters you archived from the mesa: tocar, baixar, or clear them out</span>
+    </div>
+    <div class="bib-shelf arq-block">
+      <h3>gravacoes <span class="bib-tag">archived masters</span></h3>
+      <div id="exports"><p class="side-note">loading the archive ...</p></div>
+    </div>
+  </section>
+
+  <section id="escola" class="reveal">
+    <div class="side-head">
+      <h2>As Aulas</h2>
+      <span class="side-note">the liner notes behind each module: what it teaches and where it
+        shows up in the blends</span>
+    </div>
+    <div id="escola-list"></div>
+  </section>
+
+  <section id="biblioteca" class="reveal">
+    <div class="side-head">
+      <h2>Biblioteca</h2>
+      <span class="side-note">the shelf: guides, channels and books that continue each lesson &middot; every link checked</span>
+    </div>
+
+    <div class="bib-shelf">
+      <h3>aprender fazendo <span class="bib-tag">interactive</span></h3>
+      <div class="bib-item"><a href="https://learningmusic.ableton.com" target="_blank" rel="noopener">Ableton: Learning Music</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">the best interactive intro to beats, melody and structure anywhere; runs in the browser like this escola</span></div>
+      <div class="bib-item"><a href="https://learningsynths.ableton.com" target="_blank" rel="noopener">Ableton: Learning Synths</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">aula 02 stretched into a whole course, with its own playground synth</span></div>
+      <div class="bib-item"><a href="https://www.musictheory.net" target="_blank" rel="noopener">musictheory.net</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">lessons and drills for notes, intervals and keys; A Roda makes more sense after a week here</span></div>
+      <div class="bib-item"><a href="https://www.teoria.com" target="_blank" rel="noopener">teoria.com</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">ear-training drills: interval recognition is the skill under the prova da roda</span></div>
+      <div class="bib-item"><a href="https://mixxx.org" target="_blank" rel="noopener">Mixxx</a>
+        <span class="bib-kind">app</span>
+        <span class="bib-why">free open-source DJ software: practice O Pulso with real tracks, a real crossfader and your crate</span></div>
+    </div>
+
+    <div class="bib-shelf">
+      <h3>ritmo brasileiro <span class="bib-tag">aula 01</span></h3>
+      <div class="bib-item"><a href="https://www.youtube.com/results?search_query=zabumba+bai%C3%A3o+groove+aula" target="_blank" rel="noopener">zabumba bai&atilde;o groove</a>
+        <span class="bib-kind">youtube search</span>
+        <span class="bib-why">watch a zabumba player's two hands: the low dum and the snapped ka that blend 5 needs</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/results?search_query=maracatu+alfaia+toque+marca%C3%A7%C3%A3o" target="_blank" rel="noopener">maracatu alfaia toques</a>
+        <span class="bib-kind">youtube search</span>
+        <span class="bib-why">the weight of frame 6 comes from these wrists</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/results?search_query=atabaque+toques+candombl%C3%A9+rum+rumpi+l%C3%AA" target="_blank" rel="noopener">atabaque toques de candombl&eacute;</a>
+        <span class="bib-kind">youtube search</span>
+        <span class="bib-why">the living 6/8 that frame 7's twelve-step grid quantizes</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/results?search_query=berimbau+toques+capoeira+angola+s%C3%A3o+bento" target="_blank" rel="noopener">berimbau toques</a>
+        <span class="bib-kind">youtube search</span>
+        <span class="bib-why">open, stopped, buzz: the three real notes the synth demo in blend 2 fakes</span></div>
+      <div class="bib-item"><span class="bib-book">The Brazilian Sound &middot; Chris McGowan &amp; Ricardo Pessanha</span>
+        <span class="bib-kind">book</span>
+        <span class="bib-why">the standard english-language map of Brazilian popular music, samba to mangue beat</span></div>
+    </div>
+
+    <div class="bib-shelf">
+      <h3>producao &amp; sintese <span class="bib-tag">aulas 02, 04, 06</span></h3>
+      <div class="bib-item"><a href="https://www.attackmagazine.com/technique/" target="_blank" rel="noopener">Attack Magazine: Technique</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">concrete dance-music production walkthroughs, properly techno-literate</span></div>
+      <div class="bib-item"><span class="bib-book">The Secrets of Dance Music Production &middot; Attack Magazine</span>
+        <span class="bib-kind">book</span>
+        <span class="bib-why">the best single book on this craft; the duck, the rumble and the bass swap all live in it</span></div>
+      <div class="bib-item"><a href="https://makingmusic.ableton.com" target="_blank" rel="noopener">Making Music &middot; Dennis DeSantis</a>
+        <span class="bib-kind">book, free online</span>
+        <span class="bib-why">74 strategies for starting and finishing tracks; read one chapter per pressing</span></div>
+      <div class="bib-item"><a href="https://www.soundonsound.com/series/synth-secrets" target="_blank" rel="noopener">Sound on Sound: Synth Secrets</a>
+        <span class="bib-kind">series</span>
+        <span class="bib-why">the legendary 60-plus part series; aula 02 is its first page, this is the rest</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@andrewhuang" target="_blank" rel="noopener">Andrew Huang</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">joyful production deep-dives; his synthesis explainers pair well with the sintetizador</span></div>
+    </div>
+
+    <div class="bib-shelf">
+      <h3>djing <span class="bib-tag">aulas 03, 05, 07</span></h3>
+      <div class="bib-item"><span class="bib-book">How to DJ (Properly) &middot; Broughton &amp; Brewster</span>
+        <span class="bib-kind">book</span>
+        <span class="bib-why">still the best-written manual: beatmatching, programming, reading a room</span></div>
+      <div class="bib-item"><span class="bib-book">Last Night a DJ Saved My Life &middot; Brewster &amp; Broughton</span>
+        <span class="bib-kind">book</span>
+        <span class="bib-why">the history: why the DJ exists at all, from radio to disco to techno</span></div>
+      <div class="bib-item"><a href="https://www.digitaldjtips.com" target="_blank" rel="noopener">Digital DJ Tips</a>
+        <span class="bib-kind">site</span>
+        <span class="bib-why">practical modern-gear tutorials for when the controller arrives</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@ClubReadyDJSchool" target="_blank" rel="noopener">Club Ready DJ School</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">patient full-length DJ lessons: mixing in key, phrasing, transitions</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@crossfader" target="_blank" rel="noopener">Crossfader</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">fast technique videos per skill and per controller</span></div>
+      <div class="bib-item"><a href="https://mixedinkey.com/harmonic-mixing-guide/" target="_blank" rel="noopener">Mixed In Key: Harmonic Mixing Guide</a>
+        <span class="bib-kind">guide</span>
+        <span class="bib-why">the Camelot wheel from the people who popularized it; A Roda is this, playable</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@boilerroom" target="_blank" rel="noopener">Boiler Room</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">study sets: watch hands, not just listen</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@hoer.berlin" target="_blank" rel="noopener">H&Ouml;R Berlin</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">daily techno sets in a bathroom; the hypnotic school on tap</span></div>
+    </div>
+
+    <div class="bib-shelf" id="bib-teoria">
+      <h3>teoria <span class="bib-tag">aula 03</span></h3>
+      <div class="bib-item"><a href="https://www.youtube.com/@DavidBennettPiano" target="_blank" rel="noopener">David Bennett Piano</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">theory through songs you know: keys, modes, why progressions pull</span></div>
+      <div class="bib-item"><a href="https://www.youtube.com/@SignalsMusicStudio" target="_blank" rel="noopener">Signals Music Studio</a>
+        <span class="bib-kind">youtube</span>
+        <span class="bib-why">practical modal theory: the reason the beds skip the third, explained on a guitar</span></div>
+    </div>
+  </section>
+
+  <section id="percurso-sec" class="reveal">
+    <div id="percurso"></div>
+  </section>
+</main>
+
+<footer class="reveal">
+  <span><a class="back-link" href="/">&larr; back to the pressing plant</a></span>
+  <span class="cat-no">dj.library.icu/mesa</span>
+</footer>
+
+<script src="/static/escola.js?v=19"></script>
+</body>
+</html>

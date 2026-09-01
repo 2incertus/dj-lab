@@ -1,0 +1,27 @@
+# the crate and everything derived from it: large, regenerable, or ripped audio
+sources/
+stems/
+renders/
+beds/
+previews/
+loops/
+reference/*.mp3
+
+# generated analysis
+analysis.json
+pairings.json
+
+# runtime state
+settings/
+.container-home/
+.gpu-libs/
+cf-tunnel-backups/
+
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# secrets
+*.env

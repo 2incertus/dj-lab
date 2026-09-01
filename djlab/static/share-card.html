@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>share card</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,600;9..144,900&family=Archivo:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: oklch(0.955 0.018 85);
+    --paper-deep: oklch(0.92 0.028 80);
+    --ink: oklch(0.26 0.02 55);
+    --ink-soft: oklch(0.42 0.02 55);
+    --terra: oklch(0.58 0.15 42);
+    --terra-deep: oklch(0.48 0.14 40);
+    --palm: oklch(0.46 0.08 155);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1200px; height: 630px; overflow: hidden;
+    background: var(--paper);
+    background-image: radial-gradient(oklch(0.26 0.02 55 / 0.05) 2px, transparent 2px);
+    background-size: 34px 34px;
+    font-family: "Archivo", sans-serif;
+    color: var(--ink);
+  }
+  .frame {
+    position: absolute; inset: 26px;
+    border: 3px solid var(--ink);
+    padding: 44px 54px;
+  }
+  .label-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 3px solid var(--ink); padding-bottom: 16px; width: 640px;
+  }
+  .stamp {
+    font-weight: 700; letter-spacing: 0.2em; font-size: 20px;
+    border: 2.5px solid var(--terra-deep); color: var(--terra-deep);
+    padding: 6px 18px; transform: rotate(-1.5deg); display: inline-block;
+  }
+  .cat { font-family: ui-monospace, monospace; font-size: 15px; color: var(--ink-soft); letter-spacing: 0.1em; }
+  h1 {
+    font-family: "Fraunces", serif; font-weight: 900;
+    font-size: 108px; line-height: 0.95; letter-spacing: -0.02em;
+    margin-top: 30px; width: 660px;
+  }
+  h1 .times { color: var(--terra); font-weight: 300; }
+  .sub {
+    margin-top: 26px; width: 600px;
+    font-size: 24px; line-height: 1.45; color: var(--ink-soft);
+  }
+  .badges { position: absolute; left: 54px; bottom: 44px; display: flex; gap: 12px; align-items: center; }
+  .badge {
+    font-size: 15px; font-weight: 700; letter-spacing: 0.12em;
+    border: 2px solid var(--palm); color: var(--palm); padding: 5px 12px;
+    transform: rotate(-0.8deg);
+  }
+  .badge.t { border-color: var(--terra-deep); color: var(--terra-deep); transform: rotate(0.9deg); }
+  .url {
+    position: absolute; right: 54px; bottom: 46px;
+    font-family: ui-monospace, monospace; font-size: 21px; letter-spacing: 0.08em;
+    color: var(--ink);
+    border-bottom: 3px solid var(--terra);
+    padding-bottom: 4px;
+  }
+  /* interim vinyl art: swap this block for the generated illustration */
+  .vinyl {
+    position: absolute; right: 40px; top: 60px;
+    width: 400px; height: 400px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 50% 50%,
+        var(--paper) 0 17%,
+        var(--terra) 17.5% 24%,
+        oklch(0.52 0.14 41) 24% 25%,
+        var(--terra) 25% 32%,
+        oklch(0.52 0.14 41) 32% 33%,
+        var(--terra) 33% 41%,
+        oklch(0.52 0.14 41) 41% 42%,
+        var(--terra) 42% 50%,
+        oklch(0.52 0.14 41) 50% 51%,
+        var(--terra) 51% 60%,
+        var(--ink) 60% 100%);
+    transform: rotate(-8deg);
+    box-shadow: 14px 14px 0 oklch(0.26 0.02 55 / 0.16);
+  }
+  .vinyl::after {  /* spindle */
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 14px; height: 14px; margin: -7px 0 0 -7px;
+    border-radius: 50%; background: var(--ink);
+  }
+  .leaf, .leaf2 {
+    position: absolute; width: 96px; height: 44px;
+    background: var(--palm); border-radius: 0 100% 0 100%;
+  }
+  .leaf { right: 220px; top: 26px; transform: rotate(-28deg); }
+  .leaf2 { right: 152px; top: 34px; transform: rotate(14deg) scaleX(-1); border-radius: 100% 0 100% 0; }
+  .eyes span {
+    position: absolute; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--terra-deep); top: 234px;
+  }
+  .eyes .l { right: 272px; } .eyes .r { right: 200px; }
+  .smile {
+    position: absolute; right: 205px; top: 258px; width: 62px; height: 30px;
+    border: 6px solid var(--terra-deep); border-top: none;
+    border-radius: 0 0 60px 60px; border-left: none; border-right: none;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="label-row">
+      <span class="stamp">DJ-LAB</span>
+      <span class="cat">LADO A/B/C/D &middot; 44.1 kHz</span>
+    </div>
+    <h1>Brasil <span class="times">&times;</span> M&aacute;quina</h1>
+    <p class="sub">Brazilian roots pressed onto hypnotic techno frames. Blends, a crate,
+      an intake engine and a hands-on escola, all in the browser.</p>
+    <div class="badges">
+      <span class="badge">7 FRAMES</span>
+      <span class="badge t">ESCOLA</span>
+      <span class="badge">O PERCURSO</span>
+    </div>
+    <span class="url">dj.library.icu</span>
+    <div class="vinyl"></div>
+    <div class="leaf"></div><div class="leaf2"></div>
+    <div class="eyes"><span class="l"></span><span class="r"></span></div>
+    <div class="smile"></div>
+  </div>
+</body>
+</html>
