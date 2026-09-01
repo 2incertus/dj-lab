@@ -158,12 +158,38 @@
 
   /* shared transport: clocked modules that start at the mesa tempo land on
      the same beat grid, so grade + duck phase-lock instead of flamming */
-  const TR = { bpm: 132, epoch: 0 };
-  function trAlign(stepDur) {
+  const TR = { bpm: 132, epoch: 0, quant: 0, cycle: 4, pending: 0 };
+  const trBar = () => 60 / TR.bpm * 4;
+  /* launch quantize: with quant set, a module entering the jam waits for the
+     next bar (or the top of the cycle) instead of starting under your finger.
+     Retempo calls pass launch=false: those must land on the nearest step
+     rather than leaving a bar of silence behind. */
+  function trAlign(stepDur, launch = true) {
     const ctx = AC();
     if (!TR.epoch) TR.epoch = ctx.currentTime + 0.1;
-    const k = Math.max(0, Math.ceil((ctx.currentTime + 0.08 - TR.epoch) / stepDur));
+    const now = ctx.currentTime + 0.08;
+    if (launch && TR.quant > 0) {
+      const win = TR.quant * trBar();
+      const t = TR.epoch + Math.max(0, Math.ceil((now - TR.epoch) / win)) * win;
+      /* a quantized launch can sit silent for bars. The strip counts it down
+         so the desk never looks like it ignored you. */
+      TR.pending = Math.max(TR.pending, t);
+      return { t, k: Math.round((t - TR.epoch) / stepDur) };
+    }
+    const k = Math.max(0, Math.ceil((now - TR.epoch) / stepDur));
     return { t: TR.epoch + k * stepDur, k };
+  }
+  /* where the desk is right now, counted in sixteenths from the epoch */
+  function trPos() {
+    if (!TR.epoch || !_ctx) return { bar: 1, beat: 1, step: 1, cyc: 1 };
+    const step = Math.max(0, Math.floor((_ctx.currentTime - TR.epoch) / (60 / TR.bpm / 4)));
+    const bars = Math.floor(step / 16);
+    return {
+      bar: bars + 1,
+      beat: Math.floor(step / 4) % 4 + 1,
+      step: step % 4 + 1,
+      cyc: TR.cycle > 0 ? bars % TR.cycle + 1 : bars + 1,
+    };
   }
 
   /* built widgets register here so the mesa can save/load/retempo them */
@@ -591,7 +617,7 @@
         bpm = Math.max(100, Math.min(170, v));
         q("[data-k=bpm]", el).value = bpm; q("[data-v=bpm]", el).textContent = bpm;
         if (playing) {
-          const al = trAlign(60 / bpm / (stepsN / 4));
+          const al = trAlign(60 / bpm / (stepsN / 4), false);
           nextT = al.t; cur = al.k % stepsN; drawQ.length = 0;
         }
       },
@@ -1088,7 +1114,7 @@
       },
       setTempo() {
         if (!rolOn) return;
-        const al = trAlign(60 / TR.bpm / (R.steps / 4));
+        const al = trAlign(60 / TR.bpm / (R.steps / 4), false);
         rolNextT = al.t; rolCur = al.k % R.steps; rolQ.length = 0;
       },
     };
@@ -1817,7 +1843,7 @@
       },
       setTempo(v) {
         bpm = Math.max(100, Math.min(170, v));
-        if (on) { const al = trAlign(spb()); t0 = next = al.t; }
+        if (on) { const al = trAlign(spb(), false); t0 = next = al.t; }
         drawCurve();
       },
     };
@@ -3362,6 +3388,7 @@
     for (const k of Object.keys(MOD)) if (MOD[k].setTempo) MOD[k].setTempo(TR.bpm);
     /* the dub delay is a dotted eighth, so it has to follow the tempo too */
     if (_dly) _dly.delayTime.setTargetAtTime((60 / TR.bpm) * 0.75, AC().currentTime, 0.05);
+    if (clickOn) startClick();   /* and the click relands on the new beat */
   }
   function renderDrawer() {
     const list = pressings();
@@ -3649,6 +3676,63 @@
     try { localStorage.setItem("escola_midi", "1"); } catch (e) {}
   }
 
+  /* ---- the click ----
+     A scheduled woodblock that connects straight to the destination, past the
+     bus and past the limiter the recorder taps. A metronome you can hear but
+     never print into a take. */
+  let clickOn = false, clickTimer = null, clickNext = 0;
+  function clickHit(t, accent) {
+    const ctx = AC();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "square";
+    o.frequency.value = accent ? 1600 : 1050;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(accent ? 0.3 : 0.16, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+    o.connect(g).connect(ctx.destination);
+    o.start(t); o.stop(t + 0.06);
+  }
+  function clickSchedule() {
+    if (!clickOn) return;
+    const ctx = AC(), beat = 60 / TR.bpm;
+    while (clickNext < ctx.currentTime + 0.15) {
+      const b = Math.round((clickNext - TR.epoch) / beat);
+      clickHit(clickNext, ((b % 4) + 4) % 4 === 0);
+      clickNext += beat;
+    }
+  }
+  function startClick() {
+    const ctx = AC(); ctx.resume();
+    if (!TR.epoch) TR.epoch = ctx.currentTime + 0.1;
+    clickOn = true;
+    const beat = 60 / TR.bpm;
+    clickNext = TR.epoch + Math.max(0, Math.ceil((ctx.currentTime + 0.1 - TR.epoch) / beat)) * beat;
+    clearInterval(clickTimer);
+    clickTimer = setInterval(clickSchedule, 25);
+  }
+  function stopClick() { clickOn = false; clearInterval(clickTimer); }
+  /* four clicks from the next bar line, then the callback on the downbeat */
+  function countInThen(cb) {
+    const ctx = AC(); ctx.resume();
+    if (!TR.epoch) TR.epoch = ctx.currentTime + 0.1;
+    const beat = 60 / TR.bpm, bar = trBar();
+    const start = TR.epoch + Math.max(0, Math.ceil((ctx.currentTime + 0.12 - TR.epoch) / bar)) * bar;
+    for (let i = 0; i < 4; i++) clickHit(start + i * beat, i === 0);
+    setTimeout(cb, Math.max(0, (start + 4 * beat - ctx.currentTime) * 1000));
+  }
+
+  /* ---- tap tempo ---- */
+  let taps = [];
+  function tapTempo() {
+    const now = performance.now();
+    if (taps.length && now - taps[taps.length - 1] > 2200) taps = [];   /* a new count-off */
+    taps.push(now);
+    if (taps.length > 5) taps.shift();
+    if (taps.length < 2) return null;
+    const gaps = taps.slice(1).map((t, i) => t - taps[i]);
+    return Math.round(60000 / (gaps.reduce((a, b) => a + b, 0) / gaps.length));
+  }
+
   function buildMesa() {
     if (!q("#escola-list")) return;
     mesaEl = document.createElement("div");
@@ -3667,6 +3751,30 @@
         <button class="ghost" type="button" data-m="midi"
           title="connect a midi keyboard: notes and velocity go to O Sintetizador">midi</button>
         <button class="ghost" type="button" data-m="drawer">prensagens</button>
+        <button class="ghost" type="button" data-m="tr"
+          title="the transport: counter, tap tempo, click, count-in and launch quantize">transporte</button>
+      </div>
+      <div class="mesa-row mesa-transport">
+        <span class="tr-pos" title="where the desk is in the cycle: bar . beat . step">001 . 1 . 01</span>
+        <span class="tr-arm" hidden></span>
+        <button class="ghost" type="button" data-m="tap"
+          title="tap four times in time and the mesa takes the tempo">tap</button>
+        <button class="ghost" type="button" data-m="click"
+          title="the click. It bypasses the bus, so it is never printed into a take">claque</button>
+        <label class="check" title="one bar of clicks before the recorder rolls">
+          <input type="checkbox" data-m="countin"> entrada</label>
+        <label title="modules wait for this boundary before entering, instead of starting under your finger">entrar
+          <select data-m="quant">
+            <option value="0">ja</option>
+            <option value="1">no compasso</option>
+            <option value="2">2 compassos</option>
+            <option value="4">4 compassos</option>
+          </select></label>
+        <label title="the cycle the counter wraps in">ciclo
+          <select data-m="cycle">
+            <option value="2">2</option><option value="4" selected>4</option>
+            <option value="8">8</option><option value="16">16</option>
+          </select></label>
       </div>
       <div class="mesa-drawer press-panel" hidden></div>`;
     document.body.appendChild(mesaEl);
@@ -3676,13 +3784,50 @@
       e.target.value = TR.bpm;
     });
     q("[data-m=stopall]", mesaEl).addEventListener("click", () => hush());
-    q("[data-m=rec]", mesaEl).addEventListener("click", () => {
-      if (rec) { stopRec(); return; }
+    function armRec() {
       startRec();
       mesaEl.classList.add("recording");
       q(".rec-lab", mesaEl).textContent = "parar rec";
       q(".mesa-rec-info", mesaEl).innerHTML = '<span class="rec-dot"></span> 0:00';
+    }
+    q("[data-m=rec]", mesaEl).addEventListener("click", () => {
+      if (rec) { stopRec(); return; }
+      const btn = q("[data-m=rec]", mesaEl);
+      if (btn.dataset.arming) return;
+      if (q("[data-m=countin]", mesaEl).checked) {
+        btn.dataset.arming = "1";
+        q(".rec-lab", mesaEl).textContent = "entrando";
+        countInThen(() => {
+          delete btn.dataset.arming;
+          armRec();
+        });
+        return;
+      }
+      armRec();
     });
+    q("[data-m=tap]", mesaEl).addEventListener("click", () => {
+      const v = tapTempo();
+      if (v && v >= 100 && v <= 170) setMesaTempo(v);
+      else if (v) diario(`tap deu ${v} BPM, fora do alcance da mesa`);
+    });
+    q("[data-m=click]", mesaEl).addEventListener("click", e => {
+      if (clickOn) { stopClick(); e.target.classList.remove("active"); }
+      else { startClick(); e.target.classList.add("active"); }
+    });
+    q("[data-m=quant]", mesaEl).addEventListener("change", e => {
+      TR.quant = +e.target.value;
+      diario(TR.quant ? `entrada quantizada em ${TR.quant} compasso(s)` : "entrada imediata");
+    });
+    q("[data-m=cycle]", mesaEl).addEventListener("change", e => { TR.cycle = +e.target.value; });
+    /* a phone cannot spare a third of its screen for a bar it is not using, so
+       the transport row folds away there and stays open on a desk */
+    const trRow = q(".mesa-transport", mesaEl), trBtn = q("[data-m=tr]", mesaEl);
+    const setTr = open => {
+      trRow.hidden = !open;
+      trBtn.classList.toggle("active", open);
+    };
+    setTr(!SEQ_MQ.matches);
+    trBtn.addEventListener("click", () => setTr(trRow.hidden));
     q("[data-m=drawer]", mesaEl).addEventListener("click", () => {
       const dr = q(".mesa-drawer", mesaEl);
       dr.hidden = !dr.hidden;
@@ -3732,6 +3877,24 @@
         g.fillRect(Math.min(1, vuPeak) * (w - 3), 0, 3, h);
       }
     }
+    const pos = q(".tr-pos", mesaEl);
+    if (pos) {
+      const p = trPos();
+      const s = `${String(p.cyc).padStart(3, "0")} . ${p.beat} . ${String(p.step).padStart(2, "0")}`;
+      if (pos.textContent !== s) pos.textContent = s;
+    }
+    const arm = q(".tr-arm", mesaEl);
+    if (arm) {
+      const left = _ctx ? TR.pending - _ctx.currentTime : 0;
+      if (left > 0.05) {
+        arm.hidden = false;
+        const s2 = `entra em ${left.toFixed(1)}s`;
+        if (arm.textContent !== s2) arm.textContent = s2;
+      } else if (!arm.hidden) {
+        arm.hidden = true;
+        TR.pending = 0;
+      }
+    }
     requestAnimationFrame(vuLoop);
   }
 
@@ -3776,7 +3939,7 @@
           `<p class="side-note">this module failed to load: ${e.message}</p>`;
       }
     });
-    const mx = q(".mixer", panel);
+    const mx = q(".mesa-mixer", panel);
     if (mx && !mx.dataset.built) {
       mx.dataset.built = "1";
       try { buildMixer(mx); }
@@ -3881,7 +4044,7 @@
                 <div class="station-head"><span class="st-no">M</span>
                   <span class="st-name">A Mistura</span><span class="st-tag">mixer</span></div>
                 <div class="station-widget">
-                  <div class="mixer"></div>
+                  <div class="mesa-mixer"></div>
                   <p class="side-note">the transport lives in the AO VIVO strip below: tempo, channel
                     kills, the recorder and parar tudo. Archived masters land in O Arquivo. A pressing
                     saves the state of every open module:</p>
