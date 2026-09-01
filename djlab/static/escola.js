@@ -3104,12 +3104,274 @@
     }));
   }
 
+  /* ================= A Linha: clips and the arrangement ==================
+     Capture a channel for a whole number of bars, then place the clips on four
+     tracks and print the result. Clips are captured post fader and post pan,
+     which is what you actually heard, and they play back through one "linha"
+     channel so the mixer can still ride the arrangement as a whole. */
+
+  const TL_BARS = 16, TL_TRACKS = 4;
+  const CLIPS = [];
+  const TRACKS = Array.from({ length: TL_TRACKS }, () => []);
+  let clipSeq = 0, clipSel = null, tlPlaying = false, tlSrcs = [], tlT0 = 0, tlEl = null;
+
+  function tlStatus(msg) {
+    const s = tlEl && q(".tl-status", tlEl);
+    if (s) s.textContent = msg || "";
+  }
+  const tlLast = () => TRACKS.reduce((m, items) =>
+    items.reduce((n, it) => Math.max(n, it.bar + it.clip.bars), m), 0);
+
+  /* record exactly `bars` bars of a channel, starting on the next bar line.
+     ScriptProcessor blocks do not land on bar lines, so the first block is
+     trimmed with playbackTime to keep the clip sample accurate. */
+  function captureClip(chanName, bars, onDone) {
+    const ctx = AC(); ctx.resume();
+    const src = chanName === "master" ? _limiter : (CHANNELS[chanName] && CHANNELS[chanName].pan);
+    if (!src) { tlStatus(`${chanName} has not sounded yet, so there is nothing to capture`); return; }
+    const barDur = trBar();
+    if (!TR.epoch) TR.epoch = ctx.currentTime + 0.1;
+    const start = TR.epoch +
+      Math.max(0, Math.ceil((ctx.currentTime + 0.15 - TR.epoch) / barDur)) * barDur;
+    const total = Math.round(bars * barDur * ctx.sampleRate);
+    const L = new Float32Array(total), R = new Float32Array(total);
+    const sp = ctx.createScriptProcessor(4096, 2, 2);
+    const sink = ctx.createGain(); sink.gain.value = 0;
+    let written = 0, done = false;
+    function finish() {
+      done = true;
+      try { src.disconnect(sp); } catch (e) {}
+      try { sp.disconnect(); sink.disconnect(); } catch (e) {}
+      sp.onaudioprocess = null;
+      const buf = ctx.createBuffer(2, total, ctx.sampleRate);
+      buf.copyToChannel(L, 0); buf.copyToChannel(R, 1);
+      const clip = { id: ++clipSeq, chan: chanName, bars, buf,
+                     name: `${chanName} ${bars}c`, bpm: Math.round(TR.bpm) };
+      CLIPS.push(clip);
+      clipSel = clip.id;
+      renderPool(); renderTimeline();
+      tlStatus(`clipe ${clip.name} capturado. Escolha uma faixa e um compasso.`);
+      diario("clipe: " + clip.name);
+      if (onDone) onDone(clip);
+    }
+    sp.onaudioprocess = e => {
+      if (done) return;
+      const bl = e.inputBuffer.getChannelData(0), br = e.inputBuffer.getChannelData(1);
+      const t0 = e.playbackTime != null ? e.playbackTime : ctx.currentTime;
+      if (t0 + bl.length / ctx.sampleRate <= start) return;   /* still before the line */
+      let from = t0 < start ? Math.round((start - t0) * ctx.sampleRate) : 0;
+      for (let i = from; i < bl.length && written < total; i++, written++) {
+        L[written] = bl[i]; R[written] = br[i];
+      }
+      if (written >= total) finish();
+    };
+    src.connect(sp); sp.connect(sink).connect(ctx.destination);
+    tlStatus(`esperando o compasso para capturar ${bars} de ${chanName} ...`);
+  }
+
+  function stopLinha() {
+    if (!tlPlaying) return;
+    tlPlaying = false;
+    tlSrcs.forEach(s => { try { s.stop(); } catch (e) {} });
+    tlSrcs = [];
+    const b = tlEl && q("[data-t=play]", tlEl);
+    if (b) b.textContent = "tocar a linha";
+    qa(".tl-cell.ph", tlEl || document).forEach(c => c.classList.remove("ph"));
+    release(stopLinha);
+  }
+  function playLinha() {
+    if (!tlLast()) { tlStatus("a linha esta vazia: capture um clipe e coloque numa faixa"); return; }
+    const ctx = AC(); ctx.resume();
+    const barDur = trBar();
+    tlT0 = trAlign(barDur).t;
+    tlSrcs = [];
+    TRACKS.forEach(items => items.forEach(it => {
+      const s = ctx.createBufferSource();
+      s.buffer = it.clip.buf;
+      s.connect(CHAN("linha"));
+      s.start(tlT0 + it.bar * barDur);
+      tlSrcs.push(s);
+    }));
+    tlPlaying = true;
+    claim("linha", stopLinha);
+    q("[data-t=play]", tlEl).textContent = "parar a linha";
+    requestAnimationFrame(tlHead);
+  }
+  function tlHead() {
+    if (!tlPlaying || !tlEl) return;
+    const barDur = trBar();
+    const bar = Math.floor((AC().currentTime - tlT0) / barDur);
+    qa(".tl-cell.ph", tlEl).forEach(c => c.classList.remove("ph"));
+    if (bar >= 0 && bar < TL_BARS) {
+      /* a clip stays lit for its whole span, not just its first bar */
+      TRACKS.forEach((items, t) => {
+        const it = items.find(x => bar >= x.bar && bar < x.bar + x.clip.bars);
+        const c = q(`.tl-cell[data-t="${t}"][data-bar="${it ? it.bar : bar}"]`, tlEl);
+        if (c) c.classList.add("ph");
+      });
+    }
+    if (bar >= tlLast()) { stopLinha(); return; }
+    requestAnimationFrame(tlHead);
+  }
+
+  /* print the arrangement offline through the same brick limiter the desk uses */
+  async function renderLinha() {
+    const ctx = AC();
+    const barDur = trBar(), last = tlLast();
+    if (!last) return null;
+    const oc = new OfflineAudioContext(2,
+      Math.ceil((last * barDur + 1.5) * ctx.sampleRate), ctx.sampleRate);
+    const lim = new DynamicsCompressorNode(oc, {
+      threshold: -9, knee: 3, ratio: 12, attack: 0.002, release: 0.12 });
+    lim.connect(oc.destination);
+    TRACKS.forEach(items => items.forEach(it => {
+      const s = oc.createBufferSource();
+      s.buffer = it.clip.buf;
+      s.connect(lim);
+      s.start(it.bar * barDur);
+    }));
+    const out = await oc.startRendering();
+    return wavBlob([out.getChannelData(0)], [out.getChannelData(1)], out.length, out.sampleRate);
+  }
+
+  function renderPool() {
+    const pool = tlEl && q(".tl-pool", tlEl);
+    if (!pool) return;
+    if (!CLIPS.length) {
+      pool.innerHTML = `<span class="side-note">no clips yet: capture one above</span>`;
+      return;
+    }
+    pool.innerHTML = CLIPS.map(c =>
+      `<span class="tl-clip${c.id === clipSel ? " sel" : ""}" data-clip="${c.id}"
+        title="${c.bars} bars of ${c.chan} at ${c.bpm} BPM. Tap to pick it up, then tap a cell">
+        ${escHtml(c.name)}<button type="button" class="tl-del" data-del="${c.id}"
+          title="throw this clip away">x</button></span>`).join("");
+    qa(".tl-clip", pool).forEach(ch => ch.addEventListener("click", e => {
+      if (e.target.matches(".tl-del")) return;
+      clipSel = +ch.dataset.clip;
+      renderPool();
+      tlStatus("clipe na mao: toque num compasso de uma faixa para soltar");
+    }));
+    qa(".tl-del", pool).forEach(b => b.addEventListener("click", () => {
+      const id = +b.dataset.del;
+      const i = CLIPS.findIndex(c => c.id === id);
+      if (i >= 0) CLIPS.splice(i, 1);
+      TRACKS.forEach(items => {
+        for (let k = items.length - 1; k >= 0; k--) if (items[k].clip.id === id) items.splice(k, 1);
+      });
+      if (clipSel === id) clipSel = null;
+      renderPool(); renderTimeline();
+    }));
+  }
+
+  function renderTimeline() {
+    const tl = tlEl && q(".tl-grid", tlEl);
+    if (!tl) return;
+    tl.innerHTML = `
+      <div class="tl-row tl-ruler"><span class="tl-lab"></span>
+        <div class="tl-cells">${Array.from({ length: TL_BARS }, (_, b) =>
+          `<span class="tl-bar">${b % 4 === 0 ? b + 1 : ""}</span>`).join("")}</div></div>
+      ${TRACKS.map((items, t) => {
+        /* a placed clip spans its own bars, so the covered bars get no cell of
+           their own: one more and the row would overflow the 16 column grid */
+        const cells = Array.from({ length: TL_BARS }, (_, b) => {
+          const it = items.find(x => x.bar === b);
+          if (it) {
+            return `<button type="button" class="tl-cell full" data-t="${t}" data-bar="${b}"
+              style="--span:${it.clip.bars}" title="${escHtml(it.clip.name)}: tap to lift it off"
+              >${escHtml(it.clip.chan)}</button>`;
+          }
+          if (items.some(x => b > x.bar && b < x.bar + x.clip.bars)) return "";
+          return `<button type="button" class="tl-cell${b % 4 === 0 ? " b0" : ""}"
+            data-t="${t}" data-bar="${b}" title="drop the clip in your hand here"></button>`;
+        }).join("");
+        return `<div class="tl-row"><span class="tl-lab">faixa ${t + 1}</span>
+          <div class="tl-cells">${cells}</div></div>`;
+      }).join("")}`;
+    qa(".tl-cell.full", tl).forEach(c => c.addEventListener("click", () => {
+      const t = +c.dataset.t, bar = +c.dataset.bar;
+      const i = TRACKS[t].findIndex(x => x.bar === bar);
+      if (i >= 0) { clipSel = TRACKS[t][i].clip.id; TRACKS[t].splice(i, 1); }
+      renderPool(); renderTimeline();
+      tlStatus("clipe de volta na mao");
+    }));
+    qa(".tl-cell:not(.full):not(.held)", tl).forEach(c => c.addEventListener("click", () => {
+      const clip = CLIPS.find(x => x.id === clipSel);
+      if (!clip) { tlStatus("escolha um clipe primeiro, ali em cima"); return; }
+      const t = +c.dataset.t, bar = +c.dataset.bar;
+      if (bar + clip.bars > TL_BARS) { tlStatus("esse clipe nao cabe ate o fim da linha"); return; }
+      const clash = TRACKS[t].some(x => bar < x.bar + x.clip.bars && x.bar < bar + clip.bars);
+      if (clash) { tlStatus("ja tem clipe nesse trecho da faixa"); return; }
+      TRACKS[t].push({ clip, bar });
+      renderTimeline();
+      tlStatus(`${clip.name} na faixa ${t + 1}, compasso ${bar + 1}`);
+    }));
+  }
+
+  function buildLinha(el) {
+    tlEl = el;
+    el.innerHTML = `
+      <div class="esc-controls">
+        <label title="which channel to capture. Master takes the whole desk, after the limiter">canal
+          <select data-t="chan">
+            <option value="master">master</option>
+            ${MODNAMES.map(n => `<option value="${n}">${n}</option>`).join("")}
+          </select></label>
+        <label title="how many bars to capture. Recording starts on the next bar line">compassos
+          <select data-t="bars"><option>1</option><option selected>2</option>
+            <option>4</option><option>8</option></select></label>
+        <button class="ghost" data-t="cap" title="capture starts on the next bar and stops on its own">capturar clipe</button>
+        <button class="ghost" data-t="play" title="play the arrangement from the top">tocar a linha</button>
+        <button class="ghost" data-t="wav" title="print the arrangement offline and download it">exportar wav</button>
+        <button class="ghost" data-t="arq" title="print it and keep it in the plant's archive">arquivar</button>
+      </div>
+      <p class="side-note tl-status"></p>
+      <div class="tl-pool"></div>
+      <div class="tl-grid"></div>
+      <p class="side-note esc-note">clips hold the audio you actually heard, fader and pan included,
+        and they do not stretch: a clip captured at one tempo keeps its own length if you move the
+        mesa afterwards. The whole line sounds through the <b>linha</b> channel, so you can ride or
+        kill the arrangement from A Mistura like any other module.</p>`;
+    renderPool();
+    renderTimeline();
+    q("[data-t=cap]", el).addEventListener("click", () => {
+      captureClip(q("[data-t=chan]", el).value, +q("[data-t=bars]", el).value);
+    });
+    q("[data-t=play]", el).addEventListener("click", () => tlPlaying ? stopLinha() : playLinha());
+    q("[data-t=wav]", el).addEventListener("click", async ev => {
+      ev.target.disabled = true; ev.target.textContent = "prensando ...";
+      try {
+        const blob = await renderLinha();
+        if (blob) { dlBlob(`djlab-linha-${Date.now()}.wav`, blob); tlStatus("linha exportada"); }
+        else tlStatus("a linha esta vazia");
+      } finally { ev.target.disabled = false; ev.target.textContent = "exportar wav"; }
+    });
+    q("[data-t=arq]", el).addEventListener("click", async ev => {
+      ev.target.disabled = true; ev.target.textContent = "enviando ...";
+      try {
+        const blob = await renderLinha();
+        if (!blob) { tlStatus("a linha esta vazia"); return; }
+        const r = await fetch("/api/mesa/export?name=linha", { method: "POST", body: blob });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.detail || "upload failed");
+        tlStatus("arquivada: " + j.file);
+        diario("linha arquivada: " + j.file);
+        renderExports();
+      } catch (e) {
+        tlStatus("nao consegui arquivar: " + e.message);
+      } finally { ev.target.disabled = false; ev.target.textContent = "arquivar"; }
+    });
+  }
+
   /* ================= A Mistura: the mixer surface ================= */
 
   const MXLABEL = {
     grade: "grade", sintetizador: "sinte", roda: "roda", warp: "warp", pulso: "pulso",
     duck: "duck", bandas: "bandas", voz: "voz", controlador: "ctrl", loop: "loop",
+    linha: "linha",
   };
+  /* the arrangement gets a strip too, though it has no station of its own */
+  const MXCHANS = MODNAMES.concat(["linha"]);
   let mixerEl = null, mixerOn = false;
 
   function mixerStrip(n) {
@@ -3139,7 +3401,7 @@
     mixerEl = el;
     el.innerHTML = `
       <div class="mx-rack">
-        ${MODNAMES.map(mixerStrip).join("")}
+        ${MXCHANS.map(mixerStrip).join("")}
         <div class="mx-strip mx-master" data-ch="__master">
           <span class="mx-name">master</span>
           <div class="mx-body">
@@ -3925,6 +4187,7 @@
     { id: "maquinas", label: "M&aacute;quinas", slots: [[0], [5], [1, "wide"], [8, "wide"], [9, "wide"]] },
     { id: "discos", label: "Discos", slots: [["intake", "wide"], [7, "wide"], [3], [2]] },
     { id: "mistura", label: "Mistura", slots: [[4], [6], ["master", "wide"]] },
+    { id: "linha", label: "A Linha", slots: [["linha", "wide"]] },
   ];
   function buildTab(id) {
     const panel = q(`.mesa-panel[data-panel="${id}"]`);
@@ -3944,6 +4207,12 @@
       mx.dataset.built = "1";
       try { buildMixer(mx); }
       catch (e) { mx.innerHTML = `<p class="side-note">the mixer failed to load: ${e.message}</p>`; }
+    }
+    const ln = q(".station-widget.linha", panel);
+    if (ln && !ln.dataset.built) {
+      ln.dataset.built = "1";
+      try { buildLinha(ln); }
+      catch (e) { ln.innerHTML = `<p class="side-note">a linha failed to load: ${e.message}</p>`; }
     }
     /* the meters cost a frame each, so they only run on the surface showing them */
     mixerOn = !!mx;
@@ -3999,6 +4268,7 @@
     if (e.code === "Digit1") setTab("maquinas");
     else if (e.code === "Digit2") setTab("discos");
     else if (e.code === "Digit3") setTab("mistura");
+    else if (e.code === "Digit4") setTab("linha");
     else if (e.code === "Escape") hush();
     else if (e.code === "KeyR" && e.shiftKey) {
       const b = q("#mesa [data-m=rec]");
@@ -4026,7 +4296,7 @@
           `<button type="button" class="mtab${ti === 0 ? " active" : ""}" data-tab="${t.id}">${t.label}</button>`).join("")}
           <button type="button" class="ghost mesa-reset" title="stop everything and rebuild every open module fresh">reset da mesa</button>
         </div>
-        <p class="atalhos">atalhos &middot; <b>1 2 3</b> trocam a superficie &middot; <b>espaco</b> toca
+        <p class="atalhos">atalhos &middot; <b>1 2 3 4</b> trocam a superficie &middot; <b>espaco</b> toca
           a grade &middot; <b>shift+R</b> grava &middot; <b>shift+L</b> loop &middot; <b>esc</b> para tudo
           &middot; <b>A</b>..<b>K</b> e <b>O L P ;</b> tocam o sintetizador &middot; <b>Z X</b> oitava
           &middot; <b>C V B N M ,</b> tocam os pads</p>
@@ -4037,6 +4307,13 @@
                 <div class="station-head"><span class="st-no">&darr;</span>
                   <span class="st-name">Intake</span><span class="st-tag">crate</span></div>
                 <div id="mesa-intake"></div>
+              </div>`;
+            }
+            if (m === "linha") {
+              return `<div class="station wide" data-special="linha">
+                <div class="station-head"><span class="st-no">L</span>
+                  <span class="st-name">A Linha</span><span class="st-tag">arranjo</span></div>
+                <div class="station-widget linha"></div>
               </div>`;
             }
             if (m === "master") {

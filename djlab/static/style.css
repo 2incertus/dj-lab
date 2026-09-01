@@ -1724,3 +1724,85 @@ button, .chip, .mtab, .mesa-chip, input[type=range] {
 #mesa [data-m="tr"].active { background: oklch(0.955 0.018 85 / .16); }
 /* .mesa-row sets display:flex, which out-specifies the UA rule for [hidden] */
 #mesa .mesa-transport[hidden] { display: none; }
+
+/* ---------- A Linha: clips and the arrangement ---------- */
+.mesa-panel[data-panel="linha"].active { grid-template-columns: 1fr; }
+.tl-status { min-height: 18px; margin: 6px 0 8px; color: var(--terra-deep); }
+.tl-pool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+  padding: 8px;
+  border: 1px dashed var(--rule);
+  background: var(--paper-deep);
+  margin-bottom: 12px;
+}
+.tl-clip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .04em;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  padding: 4px 6px 4px 9px;
+  cursor: pointer;
+}
+.tl-clip.sel { background: var(--ink); color: var(--paper); }
+.tl-del {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: .55;
+  cursor: pointer;
+  padding: 2px 3px;
+}
+.tl-del:hover { opacity: 1; color: var(--terra); }
+.tl-row { display: grid; grid-template-columns: 56px 1fr; gap: 4px; margin-bottom: 3px; align-items: center; }
+.tl-cells { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; min-width: 0; }
+.tl-lab {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-soft);
+}
+.tl-bar { font-family: var(--mono); font-size: 9px; color: var(--ink-soft); }
+.tl-cell {
+  height: 30px;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  background: var(--paper-deep);
+  cursor: pointer;
+}
+.tl-cell.b0 { border-left: 2px solid oklch(0.26 0.02 55 / .45); }
+.tl-cell.full {
+  grid-column: span var(--span);
+  background: var(--terra);
+  border-color: var(--terra-deep);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: .04em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+}
+.tl-cell.ph { outline: 2px solid var(--palm); outline-offset: -2px; }
+.tl-ruler .tl-cell, .tl-ruler .tl-bar { height: auto; }
+.tl-ruler .tl-cells { align-items: end; }
+
+@media (max-width: 640px) {
+  .tl-row { grid-template-columns: 40px 1fr; gap: 3px; }
+  .tl-cells { gap: 1.5px; }
+  .tl-cell { height: 34px; }
+  .tl-lab { font-size: 8px; }
+  .tl-cell.full { font-size: 8px; padding: 0 2px; }
+}
