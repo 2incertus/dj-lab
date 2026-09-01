@@ -3114,6 +3114,7 @@
   const CLIPS = [];
   const TRACKS = Array.from({ length: TL_TRACKS }, () => []);
   let clipSeq = 0, clipSel = null, tlPlaying = false, tlSrcs = [], tlT0 = 0, tlEl = null;
+  let tlLoop = false, tlLoopA = 0, tlLoopB = 4, tlTimer = null, tlNextPass = 0, tlPassLen = 0;
 
   function tlStatus(msg) {
     const s = tlEl && q(".tl-status", tlEl);
@@ -3172,6 +3173,7 @@
   function stopLinha() {
     if (!tlPlaying) return;
     tlPlaying = false;
+    clearInterval(tlTimer); tlTimer = null;
     tlSrcs.forEach(s => { try { s.stop(); } catch (e) {} });
     tlSrcs = [];
     const b = tlEl && q("[data-t=play]", tlEl);
@@ -3179,28 +3181,57 @@
     qa(".tl-cell.ph", tlEl || document).forEach(c => c.classList.remove("ph"));
     release(stopLinha);
   }
-  function playLinha() {
-    if (!tlLast()) { tlStatus("a linha esta vazia: capture um clipe e coloque numa faixa"); return; }
-    const ctx = AC(); ctx.resume();
-    const barDur = trBar();
-    tlT0 = trAlign(barDur).t;
-    tlSrcs = [];
+  /* the bracket, in bars, as a half open range. Off means the whole line once. */
+  function tlBracket() {
+    if (!tlLoop) return { a: 0, b: tlLast() };
+    const a = Math.max(0, Math.min(TL_BARS - 1, tlLoopA));
+    const b = Math.max(a + 1, Math.min(TL_BARS, tlLoopB));
+    return { a, b };
+  }
+  /* one pass of the bracket, laid down starting at t0 */
+  function schedulePass(t0) {
+    const ctx = AC(), barDur = trBar(), { a, b } = tlBracket();
     TRACKS.forEach(items => items.forEach(it => {
+      if (it.bar < a || it.bar >= b) return;
       const s = ctx.createBufferSource();
       s.buffer = it.clip.buf;
       s.connect(CHAN("linha"));
-      s.start(tlT0 + it.bar * barDur);
+      s.start(t0 + (it.bar - a) * barDur);
       tlSrcs.push(s);
     }));
+  }
+  /* keep roughly a second of passes queued ahead of the clock */
+  function tlFill() {
+    if (!tlPlaying) return;
+    const ctx = AC();
+    while (tlNextPass < ctx.currentTime + 1.0) {
+      schedulePass(tlNextPass);
+      tlNextPass += tlPassLen;
+      if (!tlLoop) { clearInterval(tlTimer); tlTimer = null; return; }
+    }
+    if (tlSrcs.length > 400) tlSrcs.splice(0, 200);   /* these have already played */
+  }
+  function playLinha() {
+    if (!tlLast()) { tlStatus("a linha esta vazia: capture um clipe e coloque numa faixa"); return; }
+    const ctx = AC(); ctx.resume();
+    const barDur = trBar(), { a, b } = tlBracket();
+    tlPassLen = Math.max(1, b - a) * barDur;
+    tlT0 = tlNextPass = trAlign(barDur).t;
+    tlSrcs = [];
     tlPlaying = true;
+    tlFill();
+    tlTimer = setInterval(tlFill, 200);
     claim("linha", stopLinha);
     q("[data-t=play]", tlEl).textContent = "parar a linha";
+    tlStatus(tlLoop ? `repetindo os compassos ${a + 1} a ${b}` : "tocando a linha inteira");
     requestAnimationFrame(tlHead);
   }
   function tlHead() {
     if (!tlPlaying || !tlEl) return;
-    const barDur = trBar();
-    const bar = Math.floor((AC().currentTime - tlT0) / barDur);
+    const barDur = trBar(), { a, b } = tlBracket();
+    const span = Math.max(1, b - a);
+    const since = (AC().currentTime - tlT0) / barDur;
+    const bar = since < 0 ? -1 : a + (tlLoop ? Math.floor(since) % span : Math.floor(since));
     qa(".tl-cell.ph", tlEl).forEach(c => c.classList.remove("ph"));
     if (bar >= 0 && bar < TL_BARS) {
       /* a clip stays lit for its whole span, not just its first bar */
@@ -3210,7 +3241,7 @@
         if (c) c.classList.add("ph");
       });
     }
-    if (bar >= tlLast()) { stopLinha(); return; }
+    if (!tlLoop && since >= tlLast() - a) { stopLinha(); return; }
     requestAnimationFrame(tlHead);
   }
 
@@ -3270,7 +3301,8 @@
     tl.innerHTML = `
       <div class="tl-row tl-ruler"><span class="tl-lab"></span>
         <div class="tl-cells">${Array.from({ length: TL_BARS }, (_, b) =>
-          `<span class="tl-bar">${b % 4 === 0 ? b + 1 : ""}</span>`).join("")}</div></div>
+          `<span class="tl-bar${tlLoop && b >= tlLoopA && b < tlLoopB ? " inloop" : ""}"
+            >${b % 4 === 0 ? b + 1 : ""}</span>`).join("")}</div></div>
       ${TRACKS.map((items, t) => {
         /* a placed clip spans its own bars, so the covered bars get no cell of
            their own: one more and the row would overflow the 16 column grid */
@@ -3322,6 +3354,12 @@
             <option>4</option><option>8</option></select></label>
         <button class="ghost" data-t="cap" title="capture starts on the next bar and stops on its own">capturar clipe</button>
         <button class="ghost" data-t="play" title="play the arrangement from the top">tocar a linha</button>
+        <label class="check" title="repeat a stretch of the line instead of playing it once through">
+          <input type="checkbox" data-t="loop"> repetir</label>
+        <label title="the first bar of the bracket">de
+          <input type="number" data-t="la" min="1" max="16" step="1" value="1"></label>
+        <label title="the last bar of the bracket, played and then looped">ate
+          <input type="number" data-t="lb" min="1" max="16" step="1" value="4"></label>
         <button class="ghost" data-t="wav" title="print the arrangement offline and download it">exportar wav</button>
         <button class="ghost" data-t="arq" title="print it and keep it in the plant's archive">arquivar</button>
       </div>
@@ -3338,6 +3376,17 @@
       captureClip(q("[data-t=chan]", el).value, +q("[data-t=bars]", el).value);
     });
     q("[data-t=play]", el).addEventListener("click", () => tlPlaying ? stopLinha() : playLinha());
+    const readBracket = () => {
+      tlLoopA = Math.max(1, Math.min(TL_BARS, +q("[data-t=la]", el).value || 1)) - 1;
+      tlLoopB = Math.max(1, Math.min(TL_BARS, +q("[data-t=lb]", el).value || 1));
+      if (tlLoopB <= tlLoopA) tlLoopB = tlLoopA + 1;
+      q("[data-t=la]", el).value = tlLoopA + 1;
+      q("[data-t=lb]", el).value = tlLoopB;
+      renderTimeline();
+      if (tlPlaying) { stopLinha(); playLinha(); }   /* re-lay the passes on the new bracket */
+    };
+    q("[data-t=loop]", el).addEventListener("change", e => { tlLoop = e.target.checked; readBracket(); });
+    qa("[data-t=la], [data-t=lb]", el).forEach(i => i.addEventListener("change", readBracket));
     q("[data-t=wav]", el).addEventListener("click", async ev => {
       ev.target.disabled = true; ev.target.textContent = "prensando ...";
       try {

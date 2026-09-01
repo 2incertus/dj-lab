@@ -1806,3 +1806,19 @@ button, .chip, .mtab, .mesa-chip, input[type=range] {
   .tl-lab { font-size: 8px; }
   .tl-cell.full { font-size: 8px; padding: 0 2px; }
 }
+.tl-bar.inloop {
+  color: var(--paper);
+  background: var(--terra-deep);
+  text-align: center;
+  border-radius: 1px;
+}
+.tl-row .tl-cells [data-t] { min-width: 0; }
+.linha .esc-controls input[type="number"] {
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 52px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 3px 5px;
+}

@@ -44,8 +44,9 @@ post-fader meter, plus sends to a plate reverb and a tempo-locked dub delay. The
 through a three-band master EQ and a glue compressor before the limiter.
 
 **A Linha** is the arrangement. Capture any channel for a whole number of bars, drop the
-clips on four tracks across sixteen bars, and print the result offline to a WAV you can
-download or file in the archive.
+clips on four tracks across sixteen bars, set a loop bracket over any stretch you want to
+keep hearing, and print the result offline to a WAV you can download or file in the
+archive.
 
 Under all of it, the AO VIVO strip carries the transport: a bar/beat/step counter, tap
 tempo, a metronome that bypasses the bus so it never prints into a take, a one-bar
