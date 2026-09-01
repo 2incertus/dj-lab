@@ -30,6 +30,28 @@ lock to one grid instead of flamming. The console records the master bus to WAV 
 archives the take, and a pressing saves the state of every open module so you can bring a
 jam back.
 
+The desk has four surfaces:
+
+**Máquinas** holds the machines. A Grade carries four pattern banks and a scene field, so
+you can type `A A B A` and the grid turns the page on the bar line. O Sintetizador carries
+O Rolo underneath it, a piano roll locked to a root and a scale that plays the synth for
+you instead of asking you to hold keys.
+
+**Discos** is the crate: intake, the vocal channel, the wheel of keys, the warp.
+
+**Mistura** is a real mixer. Every channel gets a strip with a fader, pan, mute, solo and a
+post-fader meter, plus sends to a plate reverb and a tempo-locked dub delay. The sum runs
+through a three-band master EQ and a glue compressor before the limiter.
+
+**A Linha** is the arrangement. Capture any channel for a whole number of bars, drop the
+clips on four tracks across sixteen bars, and print the result offline to a WAV you can
+download or file in the archive.
+
+Under all of it, the AO VIVO strip carries the transport: a bar/beat/step counter, tap
+tempo, a metronome that bypasses the bus so it never prints into a take, a one-bar
+count-in for the recorder, and launch quantize so modules enter on the bar rather than
+under your finger.
+
 **The crate.** Search Spotify through the taste engine, pick the YouTube match yourself
 (nothing is ever silently substituted), and yt-dlp pulls the audio. New tracks are
 analyzed for BPM and key and re-scored against every frame. Demucs (htdemucs) splits any
