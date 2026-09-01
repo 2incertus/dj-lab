@@ -49,13 +49,13 @@ _LOGIN_HTML = """<!doctype html><html lang="en"><head>
 <meta property="og:site_name" content="dj-lab">
 <meta property="og:title" content="Brasil x Maquina &middot; dj-lab">
 <meta property="og:description" content="Brazilian roots pressed onto hypnotic techno frames. Seven blends, a crate, an intake engine and a playable mesa: lessons, jams, pressings.">
-<meta property="og:image" content="https://dj.library.icu/static/share-card.png?v=2">
+<meta property="og:image" content="https://dj.library.icu/static/share-card.png?v=3">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:url" content="https://dj.library.icu">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://dj.library.icu/static/share-card.png?v=2">
+<meta name="twitter:image" content="https://dj.library.icu/static/share-card.png?v=3">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
