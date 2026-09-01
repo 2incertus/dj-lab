@@ -1584,3 +1584,89 @@ button, .chip, .mtab, .mesa-chip, input[type=range] {
   .mx-master .mx-knobs { grid-template-columns: repeat(2, 1fr); }
   .mx-spec { grid-column: 1 / -1; height: 34px; }
 }
+
+/* ---------- O Rolo: the piano roll ---------- */
+.rolo { margin-top: 16px; border-top: 2px solid var(--ink); padding-top: 12px; }
+.rolo-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.rolo-head .st-name { font-weight: 700; letter-spacing: .04em; }
+.rolo-head .st-tag { color: var(--ink-soft); }
+.roll { margin: 4px 0 8px; }
+.roll-row {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 3px;
+  margin-bottom: 2px;
+  align-items: center;
+}
+/* :not(.on) so the black key tint never out-specifies a written note */
+.roll-row.sharp .roll-cell:not(.on) { background: oklch(0.26 0.02 55 / .08); }
+.roll-steps { display: grid; grid-template-columns: repeat(var(--n), 1fr); gap: 2px; min-width: 0; }
+.roll-lab {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .04em;
+  color: var(--ink-soft);
+}
+.roll-cell {
+  border: 1px solid var(--rule);
+  background: var(--paper-deep);
+  height: 17px;
+  padding: 0;
+  min-width: 0;
+  cursor: pointer;
+}
+.roll-cell.b0 { border-left: 2px solid oklch(0.26 0.02 55 / .45); }
+.roll-cell.on { background: var(--terra); border-color: var(--terra); }
+.roll-cell.ph { outline: 2px solid var(--palm); outline-offset: -2px; }
+
+@media (max-width: 640px) {
+  /* the cells shrink so all sixteen steps stay on one portrait screen */
+  .roll-row { grid-template-columns: 34px 1fr; gap: 2px; }
+  .roll-steps { gap: 1.5px; }
+  .roll-lab { font-size: 8px; }
+  .roll-cell { height: 21px; }
+}
+
+/* ---------- A Grade: pattern banks and scenes ---------- */
+.seq-banks { align-items: center; }
+.bank-lab {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ink-soft);
+}
+.seq-banks .bank {
+  font-family: var(--mono);
+  min-width: 30px;
+  padding: 4px 8px;
+}
+.seq-banks .bank.active,
+.seq-banks [data-a="chain"].active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.seq-banks input[type="text"] {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 4px 6px;
+  width: 84px;
+}
+
+@media (max-width: 640px) {
+  .seq-banks .bank { min-width: 38px; padding: 8px 10px; }
+  .seq-banks input[type="text"] { width: 76px; padding: 7px 6px; }
+}

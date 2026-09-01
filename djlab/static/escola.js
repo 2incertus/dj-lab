@@ -300,6 +300,7 @@
                   ["ohat", "op hat"], ["rim", "rim"], ["shaker", "shaker"]];
   /* portrait phones get the grid in two stacked halves instead of a side-scroll */
   const SEQ_MQ = window.matchMedia("(max-width: 640px)");
+  const SEQ_BANKS = ["A", "B", "C", "D"];
   let _seqMQ = null;
   const P = (steps, rows, note) => ({ steps, rows, note });
   const SEQ_PRESETS = {
@@ -344,6 +345,15 @@
         <label title="delays every second cell: 0 = rigid machine, around 0.15 it rolls, past 0.4 it limps">swing <b data-v="swing">0.18</b>
           <input type="range" min="0" max="0.6" step="0.01" value="0.18" data-k="swing"></label>
       </div>
+      <div class="esc-controls seq-banks">
+        <span class="bank-lab">bancos</span>
+        ${SEQ_BANKS.map((b, i) => `<button class="ghost bank${i === 0 ? " active" : ""}"
+          data-bank="${i}" title="pattern ${b}: four grids you can switch between and chain">${b}</button>`).join("")}
+        <button class="ghost" data-a="copy" title="copy this bank over the next one">copiar &rarr;</button>
+        <label title="the scene: which banks play, in what order. They swap on the bar, never mid pattern">cena
+          <input type="text" data-k="chain" placeholder="A A B A" size="9"></label>
+        <button class="ghost" data-a="chain" title="run the scene instead of looping one bank">tocar a cena</button>
+      </div>
       <p class="side-note esc-note" data-v="note"></p>
       <div class="seq"></div>
       <p class="side-note esc-note">provas live in this grid: rebuild the <b>tresillo</b> kick from
@@ -353,6 +363,9 @@
     let bpm = 132, swing = 0.18, stepsN = 16, grid = [], playing = false,
         timer = null, cur = 0, nextT = 0, master = null, phCol = -1, edited = false,
         lastPreset = "";
+    /* four grids in the machine at once, and a scene that walks them */
+    let banks = SEQ_BANKS.map(() => null), bank = 0;
+    let chain = [], chainOn = false, chainPos = 0;
     const drawQ = [];
     const gridEl = q(".seq", el), playBtn = q("[data-a=play]", el);
 
@@ -430,6 +443,11 @@
         drawQ.push({ step: cur, t });
         nextT += dur;
         cur = (cur + 1) % stepsN;
+        /* the scene only ever turns the page on the bar line */
+        if (cur === 0 && chainOn && chain.length) {
+          chainPos = (chainPos + 1) % chain.length;
+          switchBank(chain[chainPos], true);
+        }
       }
     }
     function playhead() {
@@ -468,6 +486,60 @@
       if (edited) emit("seq-own");
       if (swing >= 0.25) emit("seq-swing");
     });
+    /* a bank is the whole pattern: its grid, its length and where it came from */
+    function saveBank() {
+      banks[bank] = { grid: grid.map(r => r.slice()), stepsN, preset: lastPreset };
+    }
+    /* load only: the caller decides whether the outgoing bank is worth keeping */
+    function loadBank(i, keepPlaying) {
+      bank = i;
+      const b = banks[bank];
+      if (b) {
+        grid = b.grid.map(r => r.slice());
+        stepsN = b.stepsN;
+        lastPreset = b.preset;
+      }
+      if (!keepPlaying) { cur = 0; phCol = -1; }
+      renderGrid();
+      qa(".bank", el).forEach(btn => btn.classList.toggle("active", +btn.dataset.bank === bank));
+    }
+    function switchBank(i, keepPlaying) {
+      if (i === bank && keepPlaying) return;
+      saveBank();
+      loadBank(i, keepPlaying);
+    }
+    qa(".bank", el).forEach(btn =>
+      btn.addEventListener("click", () => switchBank(+btn.dataset.bank, false)));
+    q("[data-a=copy]", el).addEventListener("click", () => {
+      saveBank();
+      const to = (bank + 1) % SEQ_BANKS.length;
+      banks[to] = { grid: grid.map(r => r.slice()), stepsN, preset: lastPreset };
+      diario(`banco ${SEQ_BANKS[bank]} copiado para ${SEQ_BANKS[to]}`);
+    });
+    function parseChain(s) {
+      return String(s).toUpperCase().split("").map(c => SEQ_BANKS.indexOf(c)).filter(i => i >= 0);
+    }
+    q("[data-a=chain]", el).addEventListener("click", () => {
+      const btn = q("[data-a=chain]", el);
+      if (chainOn) {
+        chainOn = false;
+        btn.classList.remove("active");
+        btn.textContent = "tocar a cena";
+        return;
+      }
+      chain = parseChain(q("[data-k=chain]", el).value);
+      if (!chain.length) {
+        diario("a cena precisa de bancos: escreva algo como A A B A");
+        return;
+      }
+      saveBank();
+      chainOn = true;
+      chainPos = 0;
+      switchBank(chain[0], playing);
+      btn.classList.add("active");
+      btn.textContent = "parar a cena";
+      diario("cena: " + chain.map(i => SEQ_BANKS[i]).join(" "));
+    });
     q("[data-k=preset]", el).addEventListener("change", e => buildGrid(e.target.value));
     q("[data-k=bpm]", el).addEventListener("input", e => {
       bpm = +e.target.value; q("[data-v=bpm]", el).textContent = bpm;
@@ -477,6 +549,9 @@
       if (playing && swing >= 0.25) emit("seq-swing");
     });
     buildGrid(Object.keys(SEQ_PRESETS)[0]);
+    /* all four banks start as the same groove, so switching never drops into
+       silence by surprise. Edit one and the scene has something to say. */
+    banks = SEQ_BANKS.map(() => ({ grid: grid.map(r => r.slice()), stepsN, preset: lastPreset }));
 
     function refreshCells() {
       qa(".seq-cell", gridEl).forEach(c => {
@@ -486,7 +561,13 @@
       });
     }
     MOD.grade = {
-      get: () => ({ preset: lastPreset, bpm, swing, grid: grid.map(r => r.slice()) }),
+      get: () => {
+        saveBank();
+        return { preset: lastPreset, bpm, swing, grid: grid.map(r => r.slice()),
+                 bank, banks: banks.map(b => b && { grid: b.grid.map(r => r.slice()),
+                   stepsN: b.stepsN, preset: b.preset }),
+                 chain: chain.map(i => SEQ_BANKS[i]).join("") };
+      },
       set(st) {
         buildGrid(SEQ_PRESETS[st.preset] ? st.preset : "empty 16");
         q("[data-k=preset]", el).value = SEQ_PRESETS[st.preset] ? st.preset : "empty 16";
@@ -499,6 +580,12 @@
         q("[data-k=swing]", el).value = swing; q("[data-v=swing]", el).textContent = swing.toFixed(2);
         lastPreset = "(prensagem)";   /* loaded grids never count for the grid provas */
         refreshCells();
+        if (st.banks) {
+          banks = st.banks.map(b => b && { grid: b.grid.map(r => r.slice()),
+            stepsN: b.stepsN, preset: b.preset });
+          if (banks[st.bank || 0]) loadBank(st.bank || 0, false);
+        }
+        if (st.chain != null) q("[data-k=chain]", el).value = st.chain;
       },
       setTempo(v) {
         bpm = Math.max(100, Math.min(170, v));
@@ -515,6 +602,15 @@
 
   let _synthKb = null;   /* previous build's keyboard handlers, removed on rebuild */
   let _midiTarget = null;   /* the live synth's midi note sink, swapped on rebuild */
+  const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  const SCALES = {
+    menor: [0, 2, 3, 5, 7, 8, 10],
+    maior: [0, 2, 4, 5, 7, 9, 11],
+    dorico: [0, 2, 3, 5, 7, 9, 10],
+    frigio: [0, 1, 3, 5, 7, 8, 10],
+  };
+  const ROLL_ROWS = 12;
+  let _rolStop = null;   /* the previous build's roll, stopped when the station rebuilds */
   function buildSynth(el) {
     const S = { wave1: "sawtooth", wave2: "sawtooth", interval: 7, detune: 8, noise: 0,
                 cutoff: 900, res: 1.5, envAmt: 1200, fDecay: 0.35, attack: 0.01,
@@ -597,6 +693,28 @@
         to C3 (the little letters on the keys), <b>O L P ;</b> continue up to E3, <b>Z / X</b>
         shift the octave (<b data-v="oct">+0</b>). Works from any surface of the mesa. A real
         controller works too: hit <b>midi</b> in the AO VIVO strip and play with velocity.</p>
+      <div class="rolo">
+        <div class="rolo-head"><span class="st-no">R</span><span class="st-name">O Rolo</span>
+          <span class="st-tag">piano roll</span></div>
+        <div class="esc-controls">
+          <button class="ghost" data-r="play" title="the roll plays this synth for you, locked to the mesa grid">tocar o rolo</button>
+          <label title="the key the roll is locked to">tom <select data-r="root">
+            ${NOTE_NAMES.map((n, i) => `<option value="${i}">${n}</option>`).join("")}</select></label>
+          <label title="every row is a degree of this scale, so the roll cannot land on a wrong note">escala <select data-r="scale">
+            ${Object.keys(SCALES).map(n => `<option>${n}</option>`).join("")}</select></label>
+          <label title="which octave the lowest row sits in">oitava <b data-v="rolOct">3</b>
+            <input type="range" min="1" max="5" step="1" value="3" data-r="oct"></label>
+          <label title="how many steps before the roll comes back around">passos <select data-r="steps">
+            <option>8</option><option selected>16</option><option>32</option></select></label>
+          <label title="how much of each step the note is held for: short = stabs, long = legato">gate <b data-v="rolGate">0.55</b>
+            <input type="range" min="0.1" max="1" step="0.05" value="0.55" data-r="gate"></label>
+          <button class="ghost" data-r="clear" title="empty the roll">limpar</button>
+        </div>
+        <div class="roll"></div>
+        <p class="side-note esc-note">one note per step: this synth is monophonic, so a cell
+          replaces whatever else was in its column. The roll starts on the mesa grid and follows
+          the mesa tempo, so it phase locks with A Grade instead of drifting against it.</p>
+      </div>
       <canvas class="scope"></canvas>`;
     let chain = null, voice = null, active = false, scopeOn = false, curPreset = "init";
 
@@ -644,6 +762,7 @@
       voice = null;
     }
     function stopSynth() {
+      rolStop();          /* parar tudo has to stop the roll, not just the voice */
       killVoice(true);
       active = false;
       qa(".key.held", el).forEach(k => k.classList.remove("held"));
@@ -832,14 +951,145 @@
     });
     syncUI();
 
+    /* ---- O Rolo: the piano roll that plays this synth for you ----
+       The synth voice is triggered live rather than scheduled, so the roll
+       runs a 25ms lookahead and lands each note with a timer keyed to the
+       audio clock. Monophonic, so a step holds one row or nothing. */
+    const R = { root: 0, scale: "menor", oct: 3, steps: 16, gate: 0.55 };
+    let rolNotes = new Array(32).fill(null);
+    let rolOn = false, rolTimer = null, rolCur = 0, rolNextT = 0, rolPh = -1;
+    const rolQ = [], rolPend = [];
+    const rollEl = q(".roll", el);
+
+    const rolMidi = row => {
+      const sc = SCALES[R.scale];
+      return 12 * (R.oct + 1) + R.root + sc[row % sc.length] + 12 * Math.floor(row / sc.length);
+    };
+    const rolLabel = row => {
+      const n = rolMidi(row);
+      return NOTE_NAMES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1);
+    };
+    function renderRoll() {
+      const perBeat = R.steps / 4;
+      rollEl.innerHTML = Array.from({ length: ROLL_ROWS }, (_, i) => {
+        const row = ROLL_ROWS - 1 - i;            /* the high notes draw on top */
+        const n = rolMidi(row);
+        const black = [1, 3, 6, 8, 10].includes(((n % 12) + 12) % 12);
+        return `<div class="roll-row${black ? " sharp" : ""}" style="--n:${R.steps}">
+          <span class="roll-lab">${rolLabel(row)}</span>
+          <div class="roll-steps">${Array.from({ length: R.steps }, (_, s) =>
+            `<button type="button" class="roll-cell${s % perBeat === 0 ? " b0" : ""}${rolNotes[s] === row ? " on" : ""}"
+              data-row="${row}" data-s="${s}"></button>`).join("")}</div></div>`;
+      }).join("");
+      qa(".roll-cell", rollEl).forEach(c => c.addEventListener("click", () => {
+        const s = +c.dataset.s, row = +c.dataset.row;
+        rolNotes[s] = rolNotes[s] === row ? null : row;
+        qa(`.roll-cell[data-s="${s}"]`, rollEl).forEach(x =>
+          x.classList.toggle("on", rolNotes[s] === +x.dataset.row));
+      }));
+      if (rolPh >= 0) qa(`.roll-cell[data-s="${rolPh}"]`, rollEl).forEach(c => c.classList.add("ph"));
+    }
+    function rolSchedule() {
+      const ctx = AC();
+      const dur = 60 / TR.bpm / (R.steps / 4);
+      while (rolNextT < ctx.currentTime + 0.15) {
+        const row = rolNotes[rolCur];
+        if (row != null) {
+          const n = rolMidi(row), t = rolNextT;
+          rolPend.push(
+            setTimeout(() => { if (rolOn && _midiTarget) _midiTarget.on(n, 0.9); },
+              Math.max(0, (t - ctx.currentTime) * 1000)),
+            setTimeout(() => { if (rolOn && _midiTarget) _midiTarget.off(n); },
+              Math.max(0, (t + dur * R.gate - ctx.currentTime) * 1000)));
+        }
+        rolQ.push({ step: rolCur, t: rolNextT });
+        rolNextT += dur;
+        rolCur = (rolCur + 1) % R.steps;
+      }
+      if (rolPend.length > 240) rolPend.splice(0, 160);   /* these have all fired */
+    }
+    function rolHead() {
+      if (!rolOn) return;
+      const now = AC().currentTime;
+      while (rolQ.length && rolQ[0].t <= now) {
+        const { step } = rolQ.shift();
+        if (rolPh >= 0) qa(`.roll-cell[data-s="${rolPh}"]`, rollEl).forEach(c => c.classList.remove("ph"));
+        qa(`.roll-cell[data-s="${step}"]`, rollEl).forEach(c => c.classList.add("ph"));
+        rolPh = step;
+      }
+      requestAnimationFrame(rolHead);
+    }
+    function rolStop() {
+      if (!rolOn) return;
+      rolOn = false;
+      clearInterval(rolTimer);
+      rolPend.forEach(clearTimeout); rolPend.length = 0;
+      rolQ.length = 0;
+      killVoice(false);
+      if (rolPh >= 0) qa(`.roll-cell[data-s="${rolPh}"]`, rollEl).forEach(c => c.classList.remove("ph"));
+      rolPh = -1;
+      q("[data-r=play]", el).textContent = "tocar o rolo";
+    }
+    function rolStart() {
+      const ctx = AC(); ctx.resume();
+      ensureChain();
+      rolOn = true;
+      const al = trAlign(60 / TR.bpm / (R.steps / 4));
+      rolNextT = al.t; rolCur = al.k % R.steps;
+      rolTimer = setInterval(rolSchedule, 25);
+      q("[data-r=play]", el).textContent = "parar o rolo";
+      requestAnimationFrame(rolHead);
+    }
+    function syncRolUI() {
+      q("[data-r=root]", el).value = R.root;
+      q("[data-r=scale]", el).value = R.scale;
+      q("[data-r=oct]", el).value = R.oct;
+      q("[data-v=rolOct]", el).textContent = R.oct;
+      q("[data-r=steps]", el).value = R.steps;
+      q("[data-r=gate]", el).value = R.gate;
+      q("[data-v=rolGate]", el).textContent = R.gate.toFixed(2);
+    }
+    if (_rolStop) _rolStop();
+    _rolStop = rolStop;
+    q("[data-r=play]", el).addEventListener("click", () => rolOn ? rolStop() : rolStart());
+    q("[data-r=clear]", el).addEventListener("click", () => { rolNotes.fill(null); renderRoll(); });
+    q("[data-r=root]", el).addEventListener("change", e => { R.root = +e.target.value; renderRoll(); });
+    q("[data-r=scale]", el).addEventListener("change", e => { R.scale = e.target.value; renderRoll(); });
+    q("[data-r=oct]", el).addEventListener("input", e => {
+      R.oct = +e.target.value; q("[data-v=rolOct]", el).textContent = R.oct; renderRoll();
+    });
+    q("[data-r=steps]", el).addEventListener("change", e => {
+      R.steps = +e.target.value; rolCur = 0; renderRoll();
+    });
+    q("[data-r=gate]", el).addEventListener("input", e => {
+      R.gate = +e.target.value; q("[data-v=rolGate]", el).textContent = R.gate.toFixed(2);
+    });
+    renderRoll();
+
     MOD.sintetizador = {
-      get: () => ({ patch: Object.assign({}, S), preset: curPreset }),
+      get: () => ({ patch: Object.assign({}, S), preset: curPreset,
+                    rolo: Object.assign({}, R, { notes: rolNotes.slice(0, R.steps) }) }),
       set(st) {
         if (st.patch) Object.assign(S, st.patch);
         curPreset = PRESETS[st.preset] ? st.preset : "init";
         q("[data-k=preset]", el).value = curPreset;
         q("[data-v=pnote]", el).textContent = PRESETS[curPreset].note;
         syncUI(); applyLive();
+        if (st.rolo) {
+          if (st.rolo.root != null) R.root = st.rolo.root;
+          if (SCALES[st.rolo.scale]) R.scale = st.rolo.scale;
+          if (st.rolo.oct != null) R.oct = st.rolo.oct;
+          if (st.rolo.steps) R.steps = st.rolo.steps;
+          if (st.rolo.gate != null) R.gate = st.rolo.gate;
+          rolNotes = new Array(32).fill(null);
+          (st.rolo.notes || []).forEach((v, i) => { if (i < 32) rolNotes[i] = v; });
+          syncRolUI(); renderRoll();
+        }
+      },
+      setTempo() {
+        if (!rolOn) return;
+        const al = trAlign(60 / TR.bpm / (R.steps / 4));
+        rolNextT = al.t; rolCur = al.k % R.steps; rolQ.length = 0;
       },
     };
     q("[data-v=pnote]", el).textContent = PRESETS.init.note;
