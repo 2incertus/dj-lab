@@ -36,47 +36,124 @@
     window.stopAllPlayback = function () { window.__appStop(); [...running.keys()].forEach(f => f()); };
   }
 
-  /* master bus: every widget sounds through a named channel into this,
-     so the mesa can kill channels individually and record the sum. A brick
-     limiter sits after the sum so three modules at once do not clip. */
+  /* master bus: every widget sounds through a named channel strip into this,
+     so the mesa can ride, place and wet each module without the module knowing.
+     A strip is fader -> pan -> (dry + reverb send + delay send). The sum runs
+     through master EQ and glue compression into a brick limiter, so ten
+     modules at once do not clip. */
   let _bus = null, _limiter = null, _an = null;
+  let _mEq = null, _mComp = null, _revBus = null, _dlyBus = null, _dly = null;
+
+  /* a plate is just noise decaying into silence: cheap, and no impulse to ship */
+  function makeIR(seconds, decay) {
+    const ctx = AC();
+    const n = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+    const buf = ctx.createBuffer(2, n, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay);
+    }
+    return buf;
+  }
+
   function BUS() {
     if (!_bus) {
       const ctx = AC();
       _bus = ctx.createGain();
       _bus.gain.value = 0.9;
+      _mEq = {
+        low: new BiquadFilterNode(ctx, { type: "lowshelf", frequency: 120, gain: 0 }),
+        mid: new BiquadFilterNode(ctx, { type: "peaking", frequency: 1000, Q: 0.7, gain: 0 }),
+        high: new BiquadFilterNode(ctx, { type: "highshelf", frequency: 6000, gain: 0 }),
+      };
+      _mComp = new DynamicsCompressorNode(ctx, {
+        threshold: -18, knee: 6, ratio: 3, attack: 0.012, release: 0.25 });
       _limiter = new DynamicsCompressorNode(ctx, {
         threshold: -9, knee: 3, ratio: 12, attack: 0.002, release: 0.12 });
-      _bus.connect(_limiter).connect(ctx.destination);
+      _bus.connect(_mEq.low).connect(_mEq.mid).connect(_mEq.high)
+        .connect(_mComp).connect(_limiter).connect(ctx.destination);
       _an = ctx.createAnalyser();
       _an.fftSize = 1024;
       _an.smoothingTimeConstant = 0.5;
       _limiter.connect(_an);
+
+      /* two send buses every channel can feed: a plate and a dub delay. Both
+         return into the bus ahead of the master chain, so they get glued too. */
+      const conv = ctx.createConvolver();
+      conv.buffer = makeIR(2.4, 2.6);
+      _revBus = ctx.createGain();
+      const revRet = ctx.createGain(); revRet.gain.value = 0.9;
+      _revBus.connect(conv).connect(revRet).connect(_bus);
+
+      _dlyBus = ctx.createGain();
+      _dly = ctx.createDelay(2);
+      _dly.delayTime.value = (60 / TR.bpm) * 0.75;   /* a dotted eighth, retuned with the tempo */
+      const fb = ctx.createGain(); fb.gain.value = 0.38;
+      const tone = new BiquadFilterNode(ctx, { type: "lowpass", frequency: 2600 });
+      const dlyRet = ctx.createGain(); dlyRet.gain.value = 0.8;
+      _dlyBus.connect(_dly);
+      _dly.connect(tone).connect(fb).connect(_dly);   /* the repeats, darkening each pass */
+      _dly.connect(dlyRet).connect(_bus);
     }
     return _bus;
   }
   const CHANNELS = {};
   function CHAN(name) {
     if (!CHANNELS[name]) {
-      const g = AC().createGain();
-      g.connect(BUS());
-      CHANNELS[name] = { g, muted: false, vol: 1 };
+      const ctx = AC();
+      BUS();
+      const g = ctx.createGain();          /* the node modules sound into: the fader */
+      const pan = ctx.createStereoPanner();
+      const dry = ctx.createGain();
+      const rev = ctx.createGain(); rev.gain.value = 0;
+      const dly = ctx.createGain(); dly.gain.value = 0;
+      const an = ctx.createAnalyser();
+      an.fftSize = 256;
+      an.smoothingTimeConstant = 0.6;
+      g.connect(pan);
+      pan.connect(dry).connect(_bus);
+      pan.connect(rev).connect(_revBus);
+      pan.connect(dly).connect(_dlyBus);
+      pan.connect(an);
+      CHANNELS[name] = { g, pan, rev, dly, an, muted: false, solo: false, vol: 1 };
     }
     return CHANNELS[name].g;
   }
+  const anySolo = () => Object.keys(CHANNELS).some(n => CHANNELS[n].solo);
+  /* a soloed channel silences every channel that is not soloed, mute aside */
   function chanApply(name) {
     const ch = CHANNELS[name];
-    if (ch) ch.g.gain.setTargetAtTime(ch.muted ? 0.0001 : ch.vol, AC().currentTime, 0.015);
+    if (!ch) return;
+    const solo = anySolo();
+    const open = !ch.muted && (!solo || ch.solo);
+    ch.g.gain.setTargetAtTime(open ? ch.vol : 0.0001, AC().currentTime, 0.015);
   }
+  function chanApplyAll() { Object.keys(CHANNELS).forEach(chanApply); }
   function chanKill(name, muted) {
     if (!CHANNELS[name]) return;
     CHANNELS[name].muted = muted;
     chanApply(name);
+    mixerSync();
   }
   function chanVol(name, vol) {
     CHAN(name);
     CHANNELS[name].vol = vol;
     chanApply(name);
+    mixerSync();
+  }
+  function chanSolo(name, on) {
+    CHAN(name);
+    CHANNELS[name].solo = on;
+    chanApplyAll();
+    mixerSync();
+  }
+  function chanPan(name, v) {
+    CHAN(name);
+    CHANNELS[name].pan.pan.setTargetAtTime(v, AC().currentTime, 0.02);
+  }
+  function chanSend(name, which, v) {
+    CHAN(name);
+    CHANNELS[name][which].gain.setTargetAtTime(v, AC().currentTime, 0.02);
   }
 
   /* shared transport: clocked modules that start at the mesa tempo land on
@@ -2734,6 +2811,7 @@
     const liveSet = new Set(running.values());
     qa(".station[data-mod]").forEach(st =>
       st.classList.toggle("live", liveSet.has(MODNAMES[+st.dataset.mod])));
+    mixerSync();
     if (!mesaEl) return;
     const live = q(".mesa-live", mesaEl);
     if (!running.size) {
@@ -2748,6 +2826,174 @@
       chanKill(n, !(CHANNELS[n] && CHANNELS[n].muted));
       mesaLive();
     }));
+  }
+
+  /* ================= A Mistura: the mixer surface ================= */
+
+  const MXLABEL = {
+    grade: "grade", sintetizador: "sinte", roda: "roda", warp: "warp", pulso: "pulso",
+    duck: "duck", bandas: "bandas", voz: "voz", controlador: "ctrl", loop: "loop",
+  };
+  let mixerEl = null, mixerOn = false;
+
+  function mixerStrip(n) {
+    return `<div class="mx-strip" data-ch="${n}">
+      <span class="mx-name" title="${n}">${MXLABEL[n] || n}</span>
+      <div class="mx-body">
+        <canvas class="mx-meter" title="this channel, post fader and pan"></canvas>
+        <input class="mx-fader" type="range" min="0" max="1.2" step="0.01" value="1"
+          aria-label="${n} fader" title="channel fader">
+      </div>
+      <div class="mx-btns">
+        <button type="button" class="mx-m" title="mute this channel">M</button>
+        <button type="button" class="mx-s" title="solo: leave only the soloed channels standing">S</button>
+      </div>
+      <div class="mx-knobs">
+        <label class="mx-knob">pan<input class="mx-pan" type="range" min="-1" max="1" step="0.02"
+          value="0" aria-label="${n} pan" title="place this channel left to right"></label>
+        <label class="mx-knob">rev<input class="mx-send" data-send="rev" type="range" min="0" max="1"
+          step="0.02" value="0" aria-label="${n} reverb send" title="send to the plate"></label>
+        <label class="mx-knob">dly<input class="mx-send" data-send="dly" type="range" min="0" max="1"
+          step="0.02" value="0" aria-label="${n} delay send" title="send to the dub delay"></label>
+      </div>
+    </div>`;
+  }
+
+  function buildMixer(el) {
+    mixerEl = el;
+    el.innerHTML = `
+      <div class="mx-rack">
+        ${MODNAMES.map(mixerStrip).join("")}
+        <div class="mx-strip mx-master" data-ch="__master">
+          <span class="mx-name">master</span>
+          <div class="mx-body">
+            <canvas class="mx-meter" title="the master bus, after the limiter"></canvas>
+            <input class="mx-fader" type="range" min="0" max="1.2" step="0.01" value="0.9"
+              aria-label="master fader" title="master fader">
+          </div>
+          <div class="mx-knobs">
+            <canvas class="mx-spec" title="the master spectrum, after the limiter"></canvas>
+            <label class="mx-knob">low<input class="mx-eq" data-eq="low" type="range" min="-12"
+              max="12" step="0.5" value="0" title="low shelf at 120 Hz"></label>
+            <label class="mx-knob">mid<input class="mx-eq" data-eq="mid" type="range" min="-12"
+              max="12" step="0.5" value="0" title="peaking at 1 kHz"></label>
+            <label class="mx-knob">high<input class="mx-eq" data-eq="high" type="range" min="-12"
+              max="12" step="0.5" value="0" title="high shelf at 6 kHz"></label>
+            <label class="mx-knob">cola<input class="mx-glue" type="range" min="-40" max="0"
+              step="1" value="-18" title="glue: how hard the master bus squeezes the sum"></label>
+          </div>
+        </div>
+      </div>
+      <p class="side-note mx-note">every module sounds through its own strip. <b>M</b> kills a
+        channel, <b>S</b> leaves only the soloed ones standing, and the two sends feed a plate
+        and a tempo locked dub delay shared by the whole desk.</p>`;
+
+    qa(".mx-strip[data-ch]", el).forEach(st => {
+      const n = st.dataset.ch;
+      if (n === "__master") return;
+      q(".mx-fader", st).addEventListener("input", e => {
+        chanVol(n, +e.target.value);
+        const sv = q(`.station[data-mod="${MODNAMES.indexOf(n)}"] .st-vol`);
+        if (sv) sv.value = e.target.value;
+      });
+      q(".mx-pan", st).addEventListener("input", e => chanPan(n, +e.target.value));
+      qa(".mx-send", st).forEach(s => s.addEventListener("input", () =>
+        chanSend(n, s.dataset.send, +s.value)));
+      q(".mx-m", st).addEventListener("click", () => {
+        CHAN(n);
+        chanKill(n, !CHANNELS[n].muted);
+        mesaLive();
+      });
+      q(".mx-s", st).addEventListener("click", () => {
+        CHAN(n);
+        chanSolo(n, !CHANNELS[n].solo);
+      });
+    });
+
+    const mst = q(".mx-master", el);
+    q(".mx-fader", mst).addEventListener("input", e => {
+      BUS();
+      _bus.gain.setTargetAtTime(+e.target.value, AC().currentTime, 0.02);
+    });
+    qa(".mx-eq", mst).forEach(inp => inp.addEventListener("input", () => {
+      BUS();
+      _mEq[inp.dataset.eq].gain.setTargetAtTime(+inp.value, AC().currentTime, 0.02);
+    }));
+    q(".mx-glue", mst).addEventListener("input", e => {
+      BUS();
+      _mComp.threshold.setTargetAtTime(+e.target.value, AC().currentTime, 0.02);
+    });
+    mixerSync();
+  }
+
+  /* keep the strips honest when a station head, a mesa chip or a pressing
+     moves a channel behind the mixer's back */
+  function mixerSync() {
+    if (!mixerEl) return;
+    const solo = anySolo();
+    const live = new Set(running.values());
+    qa(".mx-strip[data-ch]", mixerEl).forEach(st => {
+      const n = st.dataset.ch;
+      if (n === "__master") return;
+      const ch = CHANNELS[n];
+      const f = q(".mx-fader", st);
+      if (ch && document.activeElement !== f) f.value = ch.vol;
+      q(".mx-m", st).classList.toggle("on", !!(ch && ch.muted));
+      q(".mx-s", st).classList.toggle("on", !!(ch && ch.solo));
+      st.classList.toggle("dimmed", solo && !(ch && ch.solo));
+      st.classList.toggle("live", live.has(n));
+    });
+  }
+
+  function mxRms(an) {
+    const d = new Uint8Array(an.fftSize);
+    an.getByteTimeDomainData(d);
+    let sum = 0;
+    for (let i = 0; i < d.length; i++) { const v = (d[i] - 128) / 128; sum += v * v; }
+    return Math.sqrt(sum / d.length);
+  }
+  /* the meters only run while A Mistura is the open surface: this machine is
+     thermally capped and ten analysers per frame is not free */
+  function mixerLoop() {
+    if (!mixerOn || !mixerEl || !document.body.contains(mixerEl)) return;
+    qa(".mx-strip[data-ch]", mixerEl).forEach(st => {
+      const n = st.dataset.ch;
+      const c = q(".mx-meter", st);
+      if (!c || !c.clientWidth) return;
+      const g = sizeCanvas(c, c.clientHeight || 110);
+      const { width: w, height: h } = c;
+      g.clearRect(0, 0, w, h);
+      let rms = 0;
+      if (n === "__master") { if (_an) rms = mxRms(_an); }
+      else if (CHANNELS[n]) rms = mxRms(CHANNELS[n].an);
+      const lvl = Math.min(1, rms * 3);
+      const segs = 12, lit = Math.round(lvl * segs);
+      const flat = w > h;   /* the strip lies down on a phone, so the meter does too */
+      const seg = (flat ? w : h) / segs;
+      for (let i = 0; i < segs; i++) {
+        const hot = i >= segs - 2;
+        g.fillStyle = i < lit ? (hot ? "#c8502a" : "#4a7a5c") : "rgba(50,38,30,0.12)";
+        if (flat) g.fillRect(i * seg + 1, 1, Math.max(1, seg - 2), Math.max(1, h - 2));
+        else g.fillRect(1, h - (i + 1) * seg + 1, Math.max(1, w - 2), Math.max(1, seg - 2));
+      }
+    });
+    const sp = q(".mx-spec", mixerEl);
+    if (sp && sp.clientWidth && _an) {
+      const g = sizeCanvas(sp, sp.clientHeight || 34);
+      const { width: w, height: h } = sp;
+      g.clearRect(0, 0, w, h);
+      const d = new Uint8Array(_an.frequencyBinCount);
+      _an.getByteFrequencyData(d);
+      const bars = 28, step = Math.floor(d.length * 0.62 / bars), bw = w / bars;
+      for (let i = 0; i < bars; i++) {
+        let m = 0;
+        for (let k = 0; k < step; k++) m = Math.max(m, d[i * step + k] || 0);
+        const bh = (m / 255) * h;
+        g.fillStyle = "rgba(122,74,42,0.55)";
+        g.fillRect(i * bw + 1, h - bh, Math.max(1, bw - 2), bh);
+      }
+    }
+    requestAnimationFrame(mixerLoop);
   }
 
   function dlBlob(fname, blob) {
@@ -2864,6 +3110,8 @@
     TR.bpm = Math.max(100, Math.min(170, Math.round(v) || TR.bpm));
     if (mesaEl && !fromInput) q("[data-m=tempo]", mesaEl).value = TR.bpm;
     for (const k of Object.keys(MOD)) if (MOD[k].setTempo) MOD[k].setTempo(TR.bpm);
+    /* the dub delay is a dotted eighth, so it has to follow the tempo too */
+    if (_dly) _dly.delayTime.setTargetAtTime((60 / TR.bpm) * 0.75, AC().currentTime, 0.05);
   }
   function renderDrawer() {
     const list = pressings();
@@ -3278,11 +3526,21 @@
           `<p class="side-note">this module failed to load: ${e.message}</p>`;
       }
     });
+    const mx = q(".mixer", panel);
+    if (mx && !mx.dataset.built) {
+      mx.dataset.built = "1";
+      try { buildMixer(mx); }
+      catch (e) { mx.innerHTML = `<p class="side-note">the mixer failed to load: ${e.message}</p>`; }
+    }
+    /* the meters cost a frame each, so they only run on the surface showing them */
+    mixerOn = !!mx;
+    if (mixerOn) requestAnimationFrame(mixerLoop);
   }
   function setTab(id) {
     qa(".mtab").forEach(b => b.classList.toggle("active", b.dataset.tab === id));
     qa(".mesa-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === id));
     buildTab(id);
+    mixerSync();
   }
   /* reset = stop the module's channel and rebuild its widget from scratch */
   function resetStation(st) {
@@ -3371,8 +3629,9 @@
             if (m === "master") {
               return `<div class="station wide master" data-special="master">
                 <div class="station-head"><span class="st-no">M</span>
-                  <span class="st-name">O Master</span><span class="st-tag">prensagens</span></div>
+                  <span class="st-name">A Mistura</span><span class="st-tag">mixer</span></div>
                 <div class="station-widget">
+                  <div class="mixer"></div>
                   <p class="side-note">the transport lives in the AO VIVO strip below: tempo, channel
                     kills, the recorder and parar tudo. Archived masters land in O Arquivo. A pressing
                     saves the state of every open module:</p>
@@ -3386,7 +3645,7 @@
               <div class="station-head"><span class="st-no">${L.no}</span>
                 <span class="st-name">${L.title}</span><span class="st-tag">${L.tag}</span>
                 <span class="st-live" title="lit while this module sounds"></span>
-                <input type="range" class="st-vol" min="0" max="1.2" step="0.05" value="1"
+                <input type="range" class="st-vol" min="0" max="1.2" step="0.01" value="1"
                   title="this module's channel volume on the mesa">
                 ${syncable ? `<button type="button" class="st-sync"
                   title="beat match: snap this module to the mesa tempo">sync</button>` : ""}
