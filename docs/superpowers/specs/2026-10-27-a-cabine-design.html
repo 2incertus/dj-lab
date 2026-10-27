@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Cabine: a DDJ-FLX4 for the train</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Archivo:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: oklch(0.955 0.018 85);
+    --paper-deep: oklch(0.92 0.028 80);
+    --ink: oklch(0.26 0.02 55);
+    --ink-soft: oklch(0.42 0.02 55);
+    --terra: oklch(0.58 0.15 42);
+    --terra-deep: oklch(0.48 0.14 40);
+    --blue: oklch(0.62 0.1 235);
+    --green: oklch(0.6 0.12 150);
+    --rule: oklch(0.8 0.03 70);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.6 "Archivo", system-ui, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 28px; }
+  .kicker { font: 600 12px/1 "Archivo"; letter-spacing: .14em; text-transform: uppercase; color: var(--terra-deep); }
+  h1 { font: 700 44px/1.05 "Fraunces", Georgia, serif; margin: 10px 0 8px; }
+  h1 em { font-weight: 400; color: var(--terra); }
+  .lede { font-size: 18px; color: var(--ink-soft); max-width: 720px; margin: 0; }
+  .meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { font: 600 12px/1 "Archivo"; padding: 6px 10px; border-radius: 99px; border: 1.5px solid var(--ink); }
+  .pill.t { border-color: var(--terra-deep); color: var(--terra-deep); }
+  nav.toc { background: var(--paper-deep); border-radius: 10px; padding: 14px 18px; margin: 0 0 32px; }
+  nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  nav.toc a { color: var(--ink); }
+  h2 { font: 700 28px/1.15 "Fraunces", Georgia, serif; margin: 48px 0 12px; padding-top: 8px; border-top: 1px solid var(--rule); }
+  h2 .n { color: var(--terra); font-weight: 400; margin-right: 8px; }
+  h3 { font: 700 18px/1.3 "Archivo"; margin: 26px 0 8px; }
+  p, li { max-width: 760px; }
+  code { font: 500 13.5px "JetBrains Mono", ui-monospace, monospace; background: var(--paper-deep); padding: 1px 5px; border-radius: 4px; }
+  .callout { border-left: 4px solid var(--terra); background: #fff8; padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 18px 0; }
+  .callout.blue { border-color: var(--blue); }
+  .callout b { display: block; margin-bottom: 4px; }
+  .tag { display: inline-block; font: 700 10.5px/1 "Archivo"; letter-spacing: .08em; text-transform: uppercase; padding: 4px 7px; border-radius: 4px; vertical-align: 2px; margin-right: 6px; }
+  .tag.his { background: var(--ink); color: var(--paper); }
+  .tag.mine { background: var(--terra); color: #fff; }
+  .tag.builder { background: var(--blue); color: #fff; }
+  .tag.v1 { background: var(--green); color: #fff; }
+  .tag.drawn { background: var(--rule); color: var(--ink); }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { background: #fff9; border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px; font: 700 15px "Archivo"; text-transform: uppercase; letter-spacing: .06em; }
+  .card ul { margin: 0; padding-left: 18px; }
+  .card.goal h4 { color: var(--green); }
+  .card.non h4 { color: var(--ink-soft); }
+  .card.anti h4 { color: var(--terra-deep); }
+  figure { margin: 18px 0; }
+  figure img { width: 100%; border-radius: 14px; box-shadow: 0 6px 20px #0003; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-soft); margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin: 10px 0 18px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+  th { font: 700 12px "Archivo"; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); background: var(--paper-deep); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  /* swimlanes */
+  .lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .lane { border: 1.5px solid var(--ink); border-radius: 10px; padding: 12px; background: #fff7; }
+  .lanehead { font: 700 12px "Archivo"; letter-spacing: .12em; text-transform: uppercase; color: var(--terra-deep); }
+  .lane small { display: block; color: var(--ink-soft); font-size: 12.5px; line-height: 1.35; margin-bottom: 10px; }
+  .node { background: var(--paper-deep); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; line-height: 1.35; }
+  .node b { display: block; }
+  .node span { color: var(--ink-soft); }
+  .arrow { position: relative; height: 1.6rem; }
+  .arrow::before { content: ""; position: absolute; left: 1rem; top: 2px; bottom: 7px; width: 2px; background: var(--ink); }
+  .arrow::after { content: ""; position: absolute; left: calc(1rem - 4px); bottom: 0; border: 5px solid transparent; border-top: 7px solid var(--ink); border-bottom: 0; }
+  .arrow em { position: absolute; left: 2rem; top: 3px; font-size: 12px; color: var(--ink-soft); }
+  .outs { display: flex; flex-direction: column; gap: 6px; }
+  .out { border-left: 3px solid var(--terra); padding: 4px 8px; font-size: 13px; background: #fff9; border-radius: 0 6px 6px 0; }
+  ol.qs li { margin-bottom: 10px; }
+  @media (max-width: 760px) {
+    h1 { font-size: 34px; }
+    .grid3, .lanes { grid-template-columns: 1fr; }
+    nav.toc ol { columns: 1; }
+    td:first-child { white-space: normal; }
+    table { font-size: 13.5px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">dj-lab · a mesa · design</div>
+  <h1>A Cabine <em>a DDJ-FLX4 for the train</em></h1>
+  <p class="lede">A virtual DDJ-FLX4 on a phone, inside the mesa, so a friend who owns the real controller can keep getting reps on his commute home and have his hands still be right when he sits back down at the hardware.</p>
+  <div class="meta">
+    <span class="pill">2026-10-27</span>
+    <span class="pill t">status: design, awaiting sign-off</span>
+    <span class="pill">target: Galaxy S7, Chrome 138</span>
+    <span class="pill">repo: 2incertus/dj-lab (public)</span>
+    <span class="pill">branch: feat/a-cabine</span>
+  </div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#why">Intent and the why</a></li>
+  <li><a href="#goals">Goals, non-goals, anti-goals</a></li>
+  <li><a href="#decided">What was decided</a></li>
+  <li><a href="#journey">The ride, end to end</a></li>
+  <li><a href="#controls">Control map</a></li>
+  <li><a href="#tracks">Tracks: crate, grid, carry</a></li>
+  <li><a href="#mixes">Recording mixes</a></li>
+  <li><a href="#constraints">Constraints</a></li>
+  <li><a href="#prior">Prior art to use</a></li>
+  <li><a href="#builder">Left to the builder</a></li>
+  <li><a href="#done">How we know it works</a></li>
+</ol></nav>
+
+<p>How to read the tags: <span class="tag his">his call</span> means Mathias decided it in conversation. <span class="tag mine">my call</span> means the designer chose a default that he heard and did not object to; he can still flip it. <span class="tag builder">builder</span> means the implementer decides. <span class="tag v1">works</span> and <span class="tag drawn">drawn only</span> are used in the control map.</p>
+
+<h2 id="why"><span class="n">1</span>Intent and the why</h2>
+<p>Mathias's friend has a <b>Pioneer DDJ-FLX4</b> at home. His train ride home is dead time he wants to turn into practice. Asked what a good practice ride should leave him better at, the answer was <b>"familiarity and reps"</b>: not lessons, not scores, just time with his hands on the board.</p>
+<p>So the one thing that matters is <b>transfer</b>. Whatever his thumbs learn on the phone should still be true on the FLX4: where play and cue sit, what SHIFT plus a button does, how the jog nudges, which way the CFX knob goes for a low-pass. Every choice in this doc is judged against that. A nicer phone-native DJ app would be a failure here.</p>
+<p>It lives in the mesa because the mesa already has the hard parts he needs around the board: a crate with BPM and key analysis, YouTube and Spotify intake, a PIN gate, and O Arquivo for recorded mixes.</p>
+
+<h2 id="goals"><span class="n">2</span>Goals, non-goals, anti-goals</h2>
+<div class="grid3">
+  <div class="card goal"><h4>Goals</h4><ul>
+    <li>Both decks and the mixer on one landscape phone screen, in FLX4 positions.</li>
+    <li>Two songs playing at once, mixed live with jog, tempo, EQ, filter, faders, crossfader.</li>
+    <li>Controls behave like an FLX4 running rekordbox, including SHIFT combos.</li>
+    <li>Works with no signal for the whole ride once tracks are carried.</li>
+    <li>He can record a ride's mix and it ends up in O Arquivo.</li>
+    <li>He fills his crate with techno himself, from the phone.</li>
+  </ul></div>
+  <div class="card non"><h4>Non-goals (v1)</h4><ul>
+    <li>Lessons, scores, provas, streaks.</li>
+    <li>Real FLX4 over USB/Web MIDI (a later idea; the mesa already has a MIDI path).</li>
+    <li>Mic, Smart CFX, Smart Fader, PAD FX, KEYBOARD, KEY SHIFT behavior.</li>
+    <li>Serato behavior or a Serato mode.</li>
+    <li>Key lock (master tempo). Tempo moves pitch like vinyl in v1.</li>
+    <li>Portrait layout. Portrait shows a "turn sideways" card.</li>
+  </ul></div>
+  <div class="card anti"><h4>Anti-goals</h4><ul>
+    <li>Any control in a different spot, or doing something different, than on the FLX4.</li>
+    <li>Phone-only shortcuts that do not exist on the hardware (tap waveform to play, auto-sync on load, swipe gestures on the board).</li>
+    <li>A mix dying in a tunnel because something needed the network.</li>
+    <li>Breaking or slowing the existing mesa page, its crate, or its endpoints.</li>
+    <li>Secrets or the PIN in the public repo.</li>
+  </ul></div>
+</div>
+
+<h2 id="decided"><span class="n">3</span>What was decided</h2>
+<table>
+  <tr><th>Decision</th><th>Who</th><th>Detail</th></tr>
+  <tr><td>Controller model</td><td><span class="tag his">his call</span></td><td>DDJ-FLX4 (two decks).</td></tr>
+  <tr><td>Device</td><td><span class="tag his">his call</span></td><td>His phone, in headphones, on a train. The phone is a <b>Samsung Galaxy S7</b> (Mathias thinks; to be confirmed). See the phone constraints in section 8: it sets the performance, memory and screen-size floor for everything.</td></tr>
+  <tr><td>Also works on</td><td><span class="tag mine">my call</span></td><td>A current iPhone in Safari (Mathias's), because he tests during the build and may use it himself. The S7 is the floor; the iPhone is the second target.</td></tr>
+  <tr><td>Layout</td><td><span class="tag his">his call</span></td><td>Option A: the whole board, phone sideways, both decks and mixer at once, waveforms across the top standing in for the laptop screen (the FLX4 itself has no screen). Rejected: portrait stacked decks (left/right becomes top/bottom), half-board with swipe (only ~25% bigger, loses the other deck mid-transition).</td></tr>
+  <tr><td>Headphone cue</td><td><span class="tag his">his call</span></td><td>Split cue on one stereo output: cue in the left ear, master in the right.</td></tr>
+  <tr><td>Access</td><td><span class="tag his">his call</span></td><td>Same mesa PIN gate as the rest of dj.library.icu.</td></tr>
+  <tr><td>Track sources</td><td><span class="tag his">his call</span></td><td>The mesa crate, YouTube, SoundCloud, and Spotify search (which resolves to a YouTube upload he picks, as the mesa does today). Techno.</td></tr>
+  <tr><td>Practice style</td><td><span class="tag his">his call</span></td><td>Free play. "Familiarity and reps."</td></tr>
+  <tr><td>Name and URL</td><td><span class="tag mine">my call</span></td><td><b>A Cabine</b> (the booth) at <code>/cabine</code>, its own full-screen page, linked from the mesa. Installable to the home screen with its own manifest (<code>start_url</code> <code>/cabine</code>).</td></tr>
+  <tr><td>Software behavior</td><td><span class="tag his">his call</span></td><td>He uses <b>rekordbox</b> with his FLX4, so the board emulates the FLX4 running rekordbox. No custom rekordbox settings have been reported, so rekordbox defaults apply.</td></tr>
+  <tr><td>v1 scope cut</td><td><span class="tag mine">my call</span></td><td>Mic, Smart CFX, Smart Fader, PAD FX 1/2, KEYBOARD, KEY SHIFT are drawn in place but inert. Tapping one shows a small "not yet" note so he knows it is deliberate.</td></tr>
+  <tr><td>Hot cues storage</td><td><span class="tag mine">my call</span></td><td>Hot cues live on the phone, per track. Not synced to the server in v1.</td></tr>
+  <tr><td>Tracks, not sets</td><td><span class="tag mine">my call</span></td><td>A Cabine is for mixing tracks. Search results and pulls longer than 15 minutes are refused with a clear message ("that's a set, not a track"). Keeps memory, storage and analysis time bounded on the phone and on the thermally capped host.</td></tr>
+  <tr><td>Fixing a bad grid</td><td><span class="tag mine">my call</span></td><td>In v1. The crate screen gets a small grid fix for any track: halve or double the BPM, nudge the grid earlier or later, and "this is beat 1" tapped while listening. Corrections are saved on the server with the grid so they follow the track. At home he fixes grids in rekordbox on the laptop, so this is the same job in the same place (off the board).</td></tr>
+  <tr><td>Where his pulls land</td><td><span class="tag mine">my call</span></td><td>A new crate folder, <code>sources/techno/</code>, shared with the mesa like every other folder.</td></tr>
+</table>
+<figure>
+  <img src="assets/a-cabine-layout-a.png" alt="Mockup of option A: two waveforms on top, deck 1, mixer, deck 2 below, phone in landscape">
+  <figcaption>Option A as approved, drawn at iPhone landscape size (844 x 390). On the S7 the screen is 640 x 360 CSS pixels in landscape: less wide, proportionally taller, so the same layout fits with every control about a quarter smaller. This is a wireframe for positions only. Before building, the builder checks every position against a photo of a real FLX4 top panel; where this mockup and the hardware disagree, the hardware wins.</figcaption>
+</figure>
+
+<h2 id="journey"><span class="n">4</span>The ride, end to end</h2>
+<div class="lanes">
+  <div class="lane">
+    <div class="lanehead">Before the train</div>
+    <small>online, any time</small>
+    <div class="node"><b>Search</b><span>YouTube, SoundCloud, or Spotify name search, on the phone</span></div>
+    <div class="arrow"><em>he picks the upload</em></div>
+    <div class="node"><b>Pull + analyze</b><span>wav into sources/techno, BPM, key, beat grid</span></div>
+    <div class="arrow"><em>tap "carry"</em></div>
+    <div class="node"><b>Saved on the phone</b><span>audio + grid + waveform, survives offline</span></div>
+  </div>
+  <div class="lane">
+    <div class="lanehead">On the train</div>
+    <small>no signal assumed</small>
+    <div class="node"><b>Open A Cabine</b><span>from the home screen, sideways</span></div>
+    <div class="arrow"><em>BROWSE, LOAD 1 / LOAD 2</em></div>
+    <div class="node"><b>Two decks</b><span>cue in left ear, mix in right</span></div>
+    <div class="arrow"><em>reps</em></div>
+    <div class="outs">
+      <div class="out">beatmatch: tempo + jog</div>
+      <div class="out">EQ swap, filter, crossfader</div>
+      <div class="out">hot cues, loops, beat jump, FX</div>
+    </div>
+  </div>
+  <div class="lane">
+    <div class="lanehead">Recording</div>
+    <small>optional, per mix</small>
+    <div class="node"><b>REC</b><span>master bus only, never the cue side</span></div>
+    <div class="arrow"><em>stop</em></div>
+    <div class="node"><b>Kept on the phone</b><span>listed as "waiting to upload"</span></div>
+  </div>
+  <div class="lane">
+    <div class="lanehead">Back in signal</div>
+    <small>automatic, no action needed</small>
+    <div class="node"><b>Upload</b><span>to O Arquivo, retries until it lands</span></div>
+    <div class="arrow"><em>confirmed by the server</em></div>
+    <div class="node"><b>Shows in O Arquivo</b><span>on the mesa page too, playable and downloadable</span></div>
+  </div>
+</div>
+
+<h2 id="controls"><span class="n">5</span>Control map</h2>
+<p>Behavior is rekordbox's with an FLX4 attached, as he would feel it at home. Touch translations are the only liberty taken, and each is listed. Every control must support multi-touch independently (two thumbs on two different controls at once, plus SHIFT held).</p>
+<div class="callout"><b>The manual wins.</b>The SHIFT combos and edge behaviors below were written from memory of the DDJ-400/FLX4 docs. The builder checks each one against the DDJ-FLX4 operating instructions for rekordbox before building it; where this table and the manual disagree, follow the manual and note the change.</div>
+
+<h3>Deck (x2, mirrored as on the hardware)</h3>
+<table>
+  <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
+  <tr><td>PLAY/PAUSE</td><td><span class="tag v1">works</span></td><td>Toggle. SHIFT + PLAY: stutter back to the cue point (rekordbox default).</td></tr>
+  <tr><td>CUE</td><td><span class="tag v1">works</span></td><td>Paused: sets the cue point at the playhead. Held while paused: plays from cue, returns on release. Pressed while playing: back to cue and pause. SHIFT + CUE: back to the start of the track.</td></tr>
+  <tr><td>Jog, top plate</td><td><span class="tag v1">works</span></td><td>Touching the top plate grabs the record: drag rotates it, scrubbing forward and backward (vinyl mode), audio follows the finger. Lift releases back to playing speed. Paused: scrub to find a spot. SHIFT + top: fast search.</td></tr>
+  <tr><td>Jog, outer ring</td><td><span class="tag v1">works</span></td><td>Drag along the ring nudges speed up or down while dragging (pitch bend). Touch translation: the ring is the outer band of the drawn wheel; the inner disc is the top plate.</td></tr>
+  <tr><td>TEMPO slider</td><td><span class="tag v1">works</span></td><td>Vertical drag. Down = faster, as on Pioneer gear. Ranges ±6%, ±10%, ±16%, WIDE, cycled with SHIFT + BEAT SYNC. Shows a center mark. Fine control matters more than travel: the drag must allow 0.02% steps at ±6%.</td></tr>
+  <tr><td>BEAT SYNC</td><td><span class="tag v1">works</span></td><td>Matches this deck's tempo and beat phase to the other deck and stays synced while on (lit). Off by default on every load.</td></tr>
+  <tr><td>IN / OUT</td><td><span class="tag v1">works</span></td><td>Manual loop start and end (quantized to the grid when quantize is on, the rekordbox default).</td></tr>
+  <tr><td>4 BEAT/EXIT</td><td><span class="tag v1">works</span></td><td>No loop: starts a 4-beat loop. Loop active: exits. SHIFT: reloop.</td></tr>
+  <tr><td>CUE/LOOP CALL ◀ ▶</td><td><span class="tag v1">works</span></td><td>Loop active: halve / double. No loop: <span class="tag drawn">drawn only</span> (memory cue call needs rekordbox memory cues, out of scope).</td></tr>
+  <tr><td>Pad mode: HOT CUE</td><td><span class="tag v1">works</span></td><td>8 hot cues A to H. Unlit pad sets, lit pad jumps (and plays if playing). SHIFT + pad clears. Colors as rekordbox's defaults.</td></tr>
+  <tr><td>Pad mode: BEAT JUMP</td><td><span class="tag v1">works</span></td><td>Jumps back/forward by 1, 2, 4, 8 beats... in rekordbox's pad order. Keeps phase.</td></tr>
+  <tr><td>SHIFT + BEAT JUMP: BEAT LOOP</td><td><span class="tag v1">works</span></td><td>Pads set loops of 1/4, 1/2, 1, 2, 4, 8, 16, 32 beats.</td></tr>
+  <tr><td>Pad mode: SAMPLER</td><td><span class="tag v1">works</span></td><td>8 one-shots. rekordbox's factory bank is not ours to ship, so the pads load the mesa's own drum one-shots and synth stabs <span class="tag mine">my call</span>. Through the master, not a channel.</td></tr>
+  <tr><td>PAD FX1/2, KEYBOARD, KEY SHIFT</td><td><span class="tag drawn">drawn only</span></td><td>Shows "not yet".</td></tr>
+  <tr><td>SHIFT</td><td><span class="tag v1">works</span></td><td>Held, like the hardware. Per deck, as on the FLX4.</td></tr>
+</table>
+
+<h3>Mixer</h3>
+<table>
+  <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
+  <tr><td>Knobs (all)</td><td>n/a</td><td>Touch translation: vertical drag, double-tap returns to the default (center for EQ/CFX, unity for TRIM). Center detent feel on EQ and CFX.</td></tr>
+  <tr><td>TRIM</td><td><span class="tag v1">works</span></td><td>Pre-fader gain, same range as the hardware.</td></tr>
+  <tr><td>HI / MID / LOW</td><td><span class="tag v1">works</span></td><td>3-band EQ, full cut at minimum (kill), small boost at maximum, rekordbox's EQ ranges.</td></tr>
+  <tr><td>CFX</td><td><span class="tag v1">works</span></td><td>Color FX "Filter" (rekordbox default): left of center low-pass, right high-pass, resonant, off at center.</td></tr>
+  <tr><td>CUE (per channel)</td><td><span class="tag v1">works</span></td><td>Sends that channel to the headphone (left-ear) side. Both can be on.</td></tr>
+  <tr><td>Channel level meters</td><td><span class="tag v1">works</span></td><td>Post-fader levels, as on the hardware.</td></tr>
+  <tr><td>Channel faders</td><td><span class="tag v1">works</span></td><td>Vertical drag.</td></tr>
+  <tr><td>Crossfader</td><td><span class="tag v1">works</span></td><td>Horizontal drag. rekordbox's default curve.</td></tr>
+  <tr><td>MASTER LEVEL</td><td><span class="tag v1">works</span></td><td>Master out (the right ear) level.</td></tr>
+  <tr><td>MASTER CUE</td><td><span class="tag v1">works</span></td><td>Adds master to the headphone side.</td></tr>
+  <tr><td>HEADPHONES MIX / LEVEL</td><td><span class="tag v1">works</span></td><td>MIX blends cue and master on the left ear. LEVEL sets the left-ear level. The phone's hardware volume buttons still control everything.</td></tr>
+  <tr><td>BROWSE + LOAD 1 / LOAD 2</td><td><span class="tag v1">works</span></td><td>Touch translation: pressing BROWSE drops a track list over the waveform strip (the "laptop screen"). Turning BROWSE (drag) moves the highlight; the list also scrolls with a finger. LOAD 1 / LOAD 2 load the highlighted track; loading onto a playing deck follows rekordbox's default load-lock setting (the builder checks which it is). Pressing BROWSE again, or loading, closes the list.</td></tr>
+  <tr><td>Smart CFX, Smart Fader, mic</td><td><span class="tag drawn">drawn only</span></td><td>Shows "not yet".</td></tr>
+</table>
+
+<h3>Beat FX</h3>
+<table>
+  <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
+  <tr><td>FX SELECT</td><td><span class="tag v1">works</span></td><td>Cycles a v1 subset of rekordbox's Beat FX: Delay, Echo, Reverb, Flanger, Roll <span class="tag mine">my call</span>. Current effect name shown on the waveform strip.</td></tr>
+  <tr><td>BEAT ◀ ▶</td><td><span class="tag v1">works</span></td><td>Beat fraction (1/4 to 4 beats), synced to the master deck's BPM.</td></tr>
+  <tr><td>CH SELECT</td><td><span class="tag v1">works</span></td><td>1 / 2 / MASTER, as the hardware lever. Touch translation: tap cycles.</td></tr>
+  <tr><td>LEVEL/DEPTH</td><td><span class="tag v1">works</span></td><td>Wet/dry.</td></tr>
+  <tr><td>ON/OFF</td><td><span class="tag v1">works</span></td><td>Toggles the effect, lit while on. Echo/delay tails ring out after off.</td></tr>
+</table>
+
+<h3>Waveform strip (the "laptop screen")</h3>
+<p>Two horizontal scrolling waveforms, deck 1 on top, playhead at center, beat grid ticks, hot cue markers, loop region. Per deck: artist and title, current BPM (with tempo applied), key, time remaining, SYNC state. A thin full-track overview per deck shows position. It is read-only <span class="tag mine">my call</span>, following the anti-goals: tapping the waveform does nothing, because at home it is a laptop screen across the desk.</p>
+
+<h2 id="tracks"><span class="n">6</span>Tracks: crate, grid, carry</h2>
+<h3>Getting techno in</h3>
+<p>A Cabine gets a <b>crate screen</b> that works in portrait (the "turn sideways" card only covers the board). It reuses the mesa's intake endpoints:</p>
+<ul>
+  <li><b>YouTube</b>: existing search and pull (<code>/api/intake/youtube/search</code>, <code>/api/intake/pull</code>).</li>
+  <li><b>Spotify</b>: existing name search through the taste engine; a pick resolves to a YouTube upload he chooses, never silently. The "my Spotify" and "liked" tabs are Mathias's account and are not shown in A Cabine.</li>
+  <li><b>SoundCloud</b>: new. Search and pull through the same downloader the intake uses (yt-dlp handles SoundCloud). The container's yt-dlp is 2026.07.04; the builder confirms it can still search and pull from both YouTube and SoundCloud before relying on it, and bumps it if not.</li>
+  <li><b>The existing crate</b>: every analyzed track in the mesa is browsable and carryable, not only <code>sources/techno/</code>.</li>
+</ul>
+<h3>Beat grid (new)</h3>
+<p>Sync, quantized loops, beat jump, beat FX timing and the grid ticks all need a beat grid. The analyzer today stores BPM and key only. New: a grid per track (BPM plus first-beat offset, constant tempo, which suits techno), computed when a track is pulled and on demand for older crate tracks, stored next to the analysis. Downbeat (which beat is "1") is a best guess, and the common failures (half or double tempo, grid off by half a beat, wrong beat 1) are fixed by hand with the grid fix on the crate screen (see section 3). A track whose beats are too irregular for a constant grid (the analyzer's <code>beat_cv</code> already measures this) is still playable but SYNC and quantize are disabled for it, with a note.</p>
+<h3>Carrying tracks</h3>
+<p>"Carry" downloads a track to the phone: stereo audio in a format the phone decodes natively, the grid, and a precomputed waveform. The crate screen shows which tracks are on the phone and how much space they use, and lets him remove them. A Cabine requests persistent storage. Carried tracks must survive the phone being offline for days.</p>
+
+<h2 id="mixes"><span class="n">7</span>Recording mixes</h2>
+<ul>
+  <li>A REC control sits on the waveform strip (the hardware has none, so it goes on the "screen", not the board).</li>
+  <li>Records the master bus only. Never the cue side, never the split headphone signal.</li>
+  <li>Recordings are compressed (a ride can be 40+ minutes; the mesa's current WAV recorder caps at 10 minutes and a 40-minute WAV is ~400 MB).</li>
+  <li>Stored on the phone first. Uploaded to O Arquivo automatically when online, retried until the server confirms. Listed as "waiting to upload" until then.</li>
+  <li>The server side today accepts WAV only (<code>POST /api/mesa/export</code>, 200 MB cap, <code>RIFF</code> check) and O Arquivo lists <code>*.wav</code> only. Both need to accept and list the compressed format, with durations, without breaking existing WAV exports.</li>
+</ul>
+
+<h2 id="constraints"><span class="n">8</span>Constraints</h2>
+<h3>The phone</h3>
+<div class="callout blue"><b>The floor: a 2016 Galaxy S7.</b>4 GB RAM, a 2016 chip, a 5.1" screen that is 640 x 360 CSS pixels in landscape. It tops out at Android 8, and Chrome 138 (mid-2025) was the last Chrome for Android 8 and 9, so the board must run on <b>Chrome 138 with no further updates</b>. That version has everything needed (AudioWorklet, service workers, screen wake lock, fullscreen with orientation lock, MediaRecorder, persistent storage), but no newer web features may be assumed. Performance is the real constraint: the board, two scrolling waveforms and two decks must stay smooth on this phone, and audio must never crackle when the UI is busy.</div>
+<ul>
+  <li><b>Android specifics.</b> On Android, installed web apps can go fullscreen and lock to landscape, so the board should do that when opened from the home screen. No silent switch problem, no 7-day storage clearing (persistent storage is still requested). Output latency on older Android is higher than on iPhone; same handling as Bluetooth latency below.</li>
+  <li><b>Offline-first.</b> Once a track is carried, nothing on the board may touch the network. The page itself must open with no signal (installed home-screen app plus an offline cache of the page and its scripts).</li>
+  <li><b>Home screen install is required, not optional.</b> On both phones it gives the full-screen board; on iPhone, Safari can clear a website's stored data after 7 days without a visit; home-screen web apps are exempt. A Cabine should say so on first run and guide the install.</li>
+  <li><b>iPhone audio gotchas</b> (second target) the builder must handle and prove on Mathias's iPhone: audio only starts after a tap; the ring/silent switch can mute web audio unless the page declares itself as playback audio; the screen sleeping kills playback (keep the screen awake while a deck is playing); no programmatic orientation lock on iOS.</li>
+  <li><b>Safe areas.</b> Landscape iPhones have a notch or island on one side and the home-indicator gesture zone along the bottom. Nothing interactive in those zones; the crossfader especially must sit clear of the bottom swipe area.</li>
+  <li><b>Memory.</b> Two decoded 10-minute stereo tracks as 32-bit float are about 420 MB. On a 4 GB phone from 2016 that will get the tab killed. The builder chooses a representation that keeps two long tracks plus the sampler comfortably in budget and proves it on a phone.</li>
+  <li><b>Scrubbing and backward play.</b> The jog's vinyl behavior needs playback at arbitrary, including negative, speeds. The standard one-shot buffer player cannot do that, so the decks need a custom player.</li>
+  <li><b>Bluetooth latency.</b> AirPods-class headphones add roughly 150 to 250 ms. Both decks share it, so beatmatching by ear still works; jog and pad feel will lag. Nothing to fix; one line in the help says wired is tighter.</li>
+  <li><b>Touch.</b> Multi-touch on every control at once, no page scroll, no pinch zoom, no double-tap zoom, no text selection on the board.</li>
+</ul>
+<h3>The server and repo</h3>
+<ul>
+  <li><b>PIN gate.</b> All <code>/api/</code> and <code>/audio/</code> paths are gated by the <code>dj_auth</code> cookie (30-day max age). <code>/static/</code> is public, so nothing private goes there. If the cookie lapses while offline, the board must keep working with carried tracks and ask for the PIN only when it next needs the server.</li>
+  <li><b>Service worker scope.</b> Static files live under <code>/static/</code>; a worker served from there would only control <code>/static/</code>. The worker must be served at a path whose scope covers <code>/cabine</code>.</li>
+  <li><b>Public repo.</b> No PIN, hashes, tokens, or the friend's name in code, docs, or commits.</li>
+  <li><b>Do not disturb the mesa.</b> Shared endpoints keep their current behavior for the existing page. CSS class names are checked for collisions (the mesa has been bitten by <code>.mixer</code> before). A Cabine's code is its own files, not more lines in <code>escola.js</code> (4,445 lines).</li>
+  <li><b>Host.</b> The ryzen runs under a 2.2 GHz thermal cap. Grid analysis runs as a background job like the existing pull/analyze jobs, never in a request.</li>
+  <li><b>Deploy.</b> <code>dj-lab</code> container, project dir mounted at <code>/app</code>. Before any restart, check <code>/api/jobs</code> for a live pull or separation someone else started and wait for it.</li>
+</ul>
+
+<h2 id="prior"><span class="n">9</span>Prior art to use</h2>
+<p>No open-source browser FLX4 exists to copy whole. These cover pieces of it (checked 2026-10-27). The dj-lab repo has no license file today; anything borrowed keeps its license notice and credit.</p>
+<table>
+  <tr><th>Project</th><th>License</th><th>Use</th></tr>
+  <tr><td>NextDJ (antoniolg/next-dj)</td><td>MIT</td><td><b>Borrow code.</b> An Electron app whose audio runs on Web Audio: two decks, scratch audio, BPM, loops, hot cues, sync, recorder, with tests. Starting point for the deck engine, credited. Its deck player uses the standard buffer player, so backward scrubbing still needs the custom player from section 8.</td></tr>
+  <tr><td>Beat This! (CPJKU/beat_this)</td><td>MIT, weights included</td><td><b>Use</b> for the beat grid on the server: beats and downbeats (beat 1), ISMIR 2024. Runs in the container on CPU or the 2070.</td></tr>
+  <tr><td>Mixxx DDJ-FLX4 mapping (mixxxdj/mixxx, res/controllers/Pioneer-DDJ-FLX4-*)</td><td>GPL</td><td><b>Read only, never copy</b> (copying would put the repo under the GPL). A written record of what every FLX4 control does, to check behavior against alongside the Pioneer manual.</td></tr>
+  <tr><td>Signalsmith Stretch</td><td>MIT</td><td>Later, for key lock (out of v1).</td></tr>
+  <tr><td>peaks.js (BBC)</td><td>LGPL</td><td>Optional for waveforms; drawing our own is fine.</td></tr>
+  <tr><td>Vibes (leezter/Vibes)</td><td>none</td><td>Ideas only, no license, cannot copy.</td></tr>
+</table>
+
+<h2 id="builder"><span class="n">10</span>Left to the builder</h2>
+<ul>
+  <li>Audio engine architecture (deck player, FX implementations, split-cue routing), within the constraints above.</li>
+  <li>Phone storage mechanism, audio format for carried tracks, recording format.</li>
+  <li>Grid algorithm and where grids are stored, as long as old crate tracks can get one later.</li>
+  <li>Visual styling of the board: dark, hardware-like, legible at 844 x 390, consistent with the mesa's type where text appears. Positions are not the builder's call; they follow the hardware.</li>
+  <li>The exact touch math (drag sensitivity per control), tuned until fine tempo control is possible.</li>
+  <li>How the crate screen looks, as long as search, pull status, carry and remove are clear on a phone.</li>
+  <li>File layout and naming inside the repo, and tests.</li>
+</ul>
+
+<h2 id="done"><span class="n">11</span>How we know it works</h2>
+<ul>
+  <li><b>Positions:</b> the board compared side by side with a photo of the FLX4 top panel; every control in its place.</li>
+  <li><b>Automated, desktop and phone-size browser (640 x 360 and 844 x 390):</b> load two tracks, play both, drive every <span class="tag v1">works</span> control including multi-touch (SHIFT held + pad, two faders at once), and assert the audio actually changed (levels read from the audio graph, not CSS classes).</li>
+  <li><b>Sync:</b> two tracks at different BPMs, SYNC on deck 2, measured phase drift stays under a few milliseconds over 2 minutes.</li>
+  <li><b>Offline:</b> carry two tracks, cut the network, reload the installed page, mix and record for several minutes, restore the network, the recording lands in O Arquivo and plays from the mesa page.</li>
+  <li><b>Split cue:</b> left channel carries only cue/MIX content, right channel only master, verified by rendering.</li>
+  <li><b>Mesa regression:</b> the existing /mesa page, its exports, and O Arquivo behave exactly as before.</li>
+  <li><b>Real phones, early and late:</b> the audio engine is proven on a real phone before the board is built on it (a bare test page: two long tracks loaded, both playing, scrubbing, no crackle). At the end, a checklist on the S7 (Chrome 138) and on Mathias's iPhone: install to home screen, fullscreen landscape, screen stays on, two long tracks without a crash, smooth UI while both decks play, a full offline ride. Automated tests cannot prove these. If the friend's phone can't be borrowed, a cheap second-hand S7 or a Chrome 138 build on an Android 8 emulator is the fallback, and the doc should say which was used.</li>
+</ul>
+
+</div>
+</body>
+</html>
