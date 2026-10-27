@@ -1,7 +1,7 @@
 // A Cabine: the waveform strip, the "laptop screen" above the board (spec
 // section 5, "Waveform strip").
 //
-// new Strip(canvas, {decks, store, ctx, mixer, fx, reserveLeft})
+// new Strip(canvas, {decks, store, ctx, mixer, fx, reserveLeft, watch})
 //   Two lanes, deck 1 on top. Each lane: a text row (artist - title | BPM
 //   with tempo applied | the analyzed key, never tempo-shifted | -mm:ss |
 //   SYNC, MASTER on the sync master) with a thin whole-track overview at its
@@ -190,6 +190,8 @@ export class Strip {
     this.lanes = [0, 1].map(() => ({ info: null, tiles: [], over: null, loading: false, flash: null }));
     this.meters = [null, null];
     this.drawn = [null, null];
+    /** Counters (tests, and a look on the phone): tile builds, frames drawn. */
+    this.stats = { prerenders: 0, frames: 0 };
     this._keys = {};
     this._last = -Infinity;
     this._lastMeterT = null;
@@ -229,7 +231,13 @@ export class Strip {
     this.list.addEventListener("pointercancel", this._onUp);
 
     this._ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
-    if (this._ro) this._ro.observe(slot);
+    if (this._ro) {
+      this._ro.observe(slot);
+      // elements whose size moves the layout (the caixa button: its width
+      // changes when the web font arrives), so that lands now, not on the
+      // next rotation
+      for (const el of opts.watch || []) this._ro.observe(el);
+    }
     this.resize();
     this.refreshTracks().catch(() => {});
   }
@@ -348,7 +356,10 @@ export class Strip {
 
   resize() {
     const r = this.slot.getBoundingClientRect();
-    const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
+    // hidden (portrait: the strip is display:none): keep the last good layout
+    // and tiles, so turning back costs nothing
+    if (r.width < 1 || r.height < 1) return;
+    const W = Math.round(r.width), H = Math.round(r.height);
     const dpr = clamp(globalThis.devicePixelRatio || 1, 1, 3);
     if (this.L && this.L.W === W && this.L.H === H && this.dpr === dpr && this._reserved === this.reserveLeft()) return;
     this.dpr = dpr;
@@ -373,6 +384,7 @@ export class Strip {
     Ln.tiles = [];
     Ln.over = null;
     if (!Ln.info || !Ln.info.peaks || !this.L) return;
+    this.stats.prerenders++;
     const lane = this.L.lanes[i];
     const dpr = this.dpr;
     const dur = Ln.info.peaks.values.length / Ln.info.peaks.rate;
@@ -409,11 +421,13 @@ export class Strip {
 
   // ---- drawing ---------------------------------------------------------------------------
 
-  /** Call from requestAnimationFrame. Returns true if it drew. */
+  /** Call from requestAnimationFrame. Returns true if it drew. The caller
+   *  stops calling it while the board is hidden (portrait). */
   frame(now = performance.now()) {
     if (now - this._last < 1000 / FPS_MAX - 2) return false;
     this._last = now;
     if (!this.L) return false;
+    this.stats.frames++;
     const g = this.g;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     if (this._full) {
@@ -466,7 +480,7 @@ export class Strip {
     // waveform
     const L = st ? st.loop : null;
     const cues = st ? st.hotCues.map((h) => (h ? `${h.start}:${h.end}` : "-")).join(",") : "";
-    const waveKey = d ? `${Math.round(pos * pps * this.dpr)}|${L.active}|${L.in}|${L.out}|${cues}|${Ln.tiles.length}|${d.grid ? d.grid.bpm + ":" + d.grid.first_beat_s + ":" + d.grid.downbeat_s : ""}`
+    const waveKey = d ? `${Math.round(pos * pps * this.dpr)}|${L.active}|${L.in}|${L.out}|${cues}|${st.cuePoint}|${Ln.tiles.length}|${d.grid ? d.grid.bpm + ":" + d.grid.first_beat_s + ":" + d.grid.downbeat_s : ""}`
       : `e${Ln.loading ? "l" : ""}`;
     if (!this._dirty(`w${i}`, waveKey)) return;
     const w = lane.wave;

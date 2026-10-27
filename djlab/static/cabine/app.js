@@ -125,7 +125,9 @@ function matchWidgets(board, rig) {
 function tick(now) {
   raf = requestAnimationFrame(tick);
   const strip = app.strip;
-  if (!strip || !strip.frame(now)) return;
+  // portrait shows the "turn sideways" card: nothing to draw, no lights to set
+  if (!strip || !app.board || app.board.el.classList.contains("cab-portrait")) return;
+  if (!strip.frame(now)) return;
   if (!app.engine || !app.board) return;
   app.bind.refreshLights();
   for (let c = 0; c < 2; c++) {
@@ -163,7 +165,8 @@ function showBoard(opts = {}) {
   canvas.setAttribute("aria-hidden", "true");
   app.board.stripSlot.appendChild(canvas);
   const caixa = app.board.el.querySelector(".cab-board-caixa");
-  app.strip = new Strip(canvas, { store: app.store, reserveLeft: () => (caixa ? caixa.offsetWidth + 8 : 0) });
+  app.strip = new Strip(canvas, { store: app.store, reserveLeft: () => (caixa ? caixa.offsetWidth + 8 : 0),
+    watch: caixa ? [caixa] : [] });
   if (app.engine) {
     app.strip.setEngine(app.engine);
     app.engine.decks.forEach((d, i) => { if (d.state.loaded && d.track) app.strip.setTrack(i, d.track); });

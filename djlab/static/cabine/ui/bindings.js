@@ -24,6 +24,9 @@
 //   rekordbox's browser on the laptop); loading closes the list. The deck is
 //   emptied first (Deck.unload: the worklet drops the old PCM), then the new
 //   track is decoded, then loaded; its saved hot cues come back with it.
+//   One decode at a time per deck (phone memory): LOAD on a deck that is
+//   still loading is ignored. Leaving for the caixa mid-load still loads the
+//   deck; the next board puts it on its strip.
 // - Hot cues are saved to the phone on every set and clear (ruling R5).
 // - BROWSE pushed while the list is open closes it.
 // - CUE/LOOP CALL with no loop active: "not yet" (memory cues are out of v1).
@@ -31,12 +34,17 @@
 //   tempo, sync, load and master changes all reach it.
 //
 // Lights (refreshLights, called from the strip's frame loop, only changed
-// ones touch the DOM): PLAY lit while playing, lit and flashing when paused
-// at the cue point; CUE lit at the cue point or while held; BEAT SYNC lit
+// ones touch the DOM). The DDJ-FLX4 manual's part-names tables (pp. 18-20,
+// "13 PLAY/PAUSE button", "14 CUE button") give no indicator states for
+// PLAY/PAUSE or CUE; the rekordbox manual neither. So these two follow the
+// Pioneer CDJ / DDJ convention [B, CONFIRM ON HIS RIG]: PLAY lit while
+// playing, flashing while paused; CUE lit at the cue point while paused (and
+// while held), flashing when paused away from it, dark while playing. The
+// manual does say "When Beat FX is turned on, the button flashes" (Beat FX,
+// "Using Beat FX"), so ON/OFF flashes while on. The rest [B]: BEAT SYNC lit
 // while on, its MASTER legend lit on the sync master; IN / OUT lit while a
 // loop plays (the one being adjusted flashes); pads in HOT CUE mode lit in
-// the set cue's colour, in BEAT LOOP mode the running loop's pad; ON/OFF lit
-// while the effect is on.
+// the set cue's colour, in BEAT LOOP mode the running loop's pad.
 
 import { HOT_CUE_COLOURS } from "../flx4-map.js";
 import { masterDeck } from "../engine/rig.js";
@@ -54,8 +62,9 @@ export function makeBindings(env) {
   const log = [];
   const pending = [];
   const needCbs = [];
-  const loadSeq = { 1: 0, 2: 0 };
+  const loading = { 1: false, 2: false };
   const shown = new Map();                      // light id -> last value set
+  let lightsRuns = 0;
 
   const deckOf = (rig, c) => rig.decks[(c && c.deck ? c.deck : 1) - 1];
   const otherOf = (rig, c) => rig.decks[c && c.deck === 2 ? 0 : 1];
@@ -72,7 +81,8 @@ export function makeBindings(env) {
     const before = cueKey(d.state.hotCues);
     fn(d, v);
     if (cueKey(d.state.hotCues) !== before && d.track && d.track.file && store) {
-      store.putHotCues(d.track.file, d.state.hotCues.map((h) => (h ? { ...h } : null))).catch(() => {});
+      store.putHotCues(d.track.file, d.state.hotCues.map((h) => (h ? { ...h } : null)))
+        .catch((e) => console.warn(`A Cabine: hot cues for ${d.track.file} not saved`, e));
     }
   });
 
@@ -132,9 +142,9 @@ export function makeBindings(env) {
 
   // the strip's browse needs no engine
   const direct = {
-    "strip.openBrowse": () => { const s = S(); if (s.isBrowseOpen) s.closeBrowse(); else s.openBrowse(); },
-    "strip.closeBrowse": () => S().closeBrowse(),
-    "strip.browseMove": (v) => S().browseMove(v),
+    "strip.openBrowse": () => { const s = S(); if (s) { if (s.isBrowseOpen) s.closeBrowse(); else s.openBrowse(); } },
+    "strip.closeBrowse": () => { const s = S(); if (s) s.closeBrowse(); },
+    "strip.browseMove": (v) => { const s = S(); if (s) s.browseMove(v); },
   };
 
   function record(action, value, c) {
@@ -178,29 +188,34 @@ export function makeBindings(env) {
     const rig = getRig();
     if (!rig) return;
     const i = n - 1;
-    const file = S().highlighted();
-    if (!file) { S().flash(i, "nothing to load: carry tracks from the caixa"); return; }
+    const strip = S();
+    if (!strip || loading[n]) return;               // one decode at a time per deck (phone memory)
+    const file = strip.highlighted();
+    if (!file) { strip.flash(i, "nothing to load: carry tracks from the caixa"); return; }
     const deck = rig.decks[i];
-    if (LOAD_LOCK && deck.state.playing) { S().flash(i, LOAD_LOCK_TEXT); return; }
-    S().closeBrowse();
-    const seq = ++loadSeq[n];
+    if (LOAD_LOCK && deck.state.playing) { strip.flash(i, LOAD_LOCK_TEXT); return; }
+    strip.closeBrowse();
+    loading[n] = true;
     deck.unload();
-    S().setLoading(i, file);
+    strip.setLoading(i, file);
     rig.fx.refresh();
     let track;
     try {
       track = await env.loadTrack(rig.ctx, source, file);
     } catch (e) {
-      if (seq === loadSeq[n]) {
-        S().setTrack(i, null);
-        S().flash(i, `could not load: ${String((e && e.message) || e).slice(0, 80)}`);
+      loading[n] = false;
+      const s = S();                                // the board may have been left meanwhile
+      if (s) {
+        s.setTrack(i, null);
+        s.flash(i, `could not load: ${String((e && e.message) || e).slice(0, 80)}`);
       }
       return;
     }
-    if (seq !== loadSeq[n]) return;               // a newer LOAD on this deck won
+    loading[n] = false;
     track.file = file;
     deck.load(track);
-    S().setTrack(i, track);
+    const s = S();                                  // a new board puts the decks' tracks on its strip
+    if (s) s.setTrack(i, track);
     rig.fx.refresh();
     if (env.onLoaded) env.onLoaded(n, file);
   }
@@ -218,14 +233,17 @@ export function makeBindings(env) {
     const rig = getRig();
     const b = boardOf();
     if (!rig || !b) return;
+    lightsRuns++;
     const master = masterDeck(rig.decks);
     rig.decks.forEach((d, k) => {
       const n = k + 1;
       const st = d.state;
-      const atCue = st.loaded && !st.playing && Math.abs(d.posAt() - st.cuePoint) < AT_CUE_S;
-      show(b, `d${n}-play`, st.playing || atCue);
-      show(b, `blink:d${n}-play`, !st.playing && atCue);
-      show(b, `d${n}-cue`, st.cueHeld || atCue);
+      const paused = st.loaded && !st.playing;
+      const atCue = paused && Math.abs(d.posAt() - st.cuePoint) < AT_CUE_S;
+      show(b, `d${n}-play`, st.playing || paused);
+      show(b, `blink:d${n}-play`, paused);
+      show(b, `d${n}-cue`, st.cueHeld || paused);
+      show(b, `blink:d${n}-cue`, paused && !atCue && !st.cueHeld);
       show(b, `d${n}-sync`, st.syncOn);
       show(b, `mark:d${n}-sync`, master === d);
       const L = st.loop;
@@ -245,6 +263,7 @@ export function makeBindings(env) {
       }
     });
     show(b, "fx-on", !!rig.fx.state.on);
+    show(b, "blink:fx-on", !!rig.fx.state.on);
   }
 
   return {
@@ -256,5 +275,6 @@ export function makeBindings(env) {
     resetLights: () => shown.clear(),
     onNeedEngine: (cb) => { needCbs.push(cb); },
     log,
+    get lightsRuns() { return lightsRuns; },
   };
 }

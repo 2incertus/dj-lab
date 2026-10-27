@@ -160,3 +160,26 @@ test("loadTrack_on_an_exact_decode_trims_nothing", async () => {
   assert.equal(t.gapless.action, "exact");
   assert.equal(t.peaks, null);
 });
+
+test("gapless_trim_with_the_lame_header_classifies_exactly", () => {
+  const S = 441000;
+  const lame = { delay: 576, padding: 1100 };
+  // a decoder that dropped the delay and kept the padding: padding at the tail only
+  let t = gaplessTrim(S + 1100, S, lame);
+  assert.deepEqual([t.head, t.tail, t.action], [0, 1100, "padding"], "never taken for the head delay");
+  t = gaplessTrim(S + 1100 - 529, S, lame);
+  assert.deepEqual([t.head, t.tail, t.action], [0, 571, "padding"], "padding less the decoder delay");
+  // nothing dropped: delay + padding, split at delay + 529
+  t = gaplessTrim(S + 576 + 1100, S, lame);
+  assert.deepEqual([t.head, t.tail, t.action], [1105, 571, "trimmed"]);
+  // padding dropped, delay kept: head only
+  t = gaplessTrim(S + 1105, S, { delay: 576, padding: 300 });
+  assert.deepEqual([t.head, t.tail, t.action], [1105, 0, "head"]);
+  // within a couple of frames
+  t = gaplessTrim(S + 576 + 1100 + 1, S, lame);
+  assert.equal(t.action, "trimmed");
+  // the header explains nothing: left alone
+  assert.equal(gaplessTrim(S + 1400, S, lame).action, "mismatch");
+  // no header: the heuristic window still applies
+  assert.equal(gaplessTrim(S + 1105 + 400, S, null).action, "trimmed");
+});

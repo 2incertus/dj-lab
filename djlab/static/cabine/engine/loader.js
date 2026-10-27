@@ -22,11 +22,11 @@
 // one frame (1152). Browsers that read the LAME/Info header drop both; one
 // that does not hands back the whole thing, and every beat would land 25 ms
 // late. meta.samples is the source's exact frame count (cabine.py), so the
-// loader compares: equal = nothing to do; longer by the head delay plus up
-// to a frame of padding = trim both ends (the LAME header's own delay is used
-// when it can be read); longer by less than the head delay = the decoder
-// dropped the delay but not the padding, trim the tail; anything else is
-// left alone and logged. Trimming exactly leaves no residual, so grid.offset_s
+// loader compares: equal = nothing to do. With the LAME header's delay and
+// padding the excess is classified exactly (gaplessTrim): padding only = tail,
+// delay + padding = both ends, delay only = head. Without a header: longer by
+// the head delay plus up to a frame of padding = both ends, by less than the
+// head delay = tail. Anything else is left alone. Every load logs its decision. Trimming exactly leaves no residual, so grid.offset_s
 // stays meta.carry_offset_s; that offset is the hook for any residual a phone
 // turns out to have.
 
@@ -36,7 +36,8 @@ export const LAME_DECODER_DELAY = 529;
 /** libmp3lame's encoder delay (576) + the decoder delay, at 44.1 kHz. */
 export const DEFAULT_GAPLESS_HEAD = 576 + LAME_DECODER_DELAY;
 export const GAPLESS_FRAME = 1152;
-const GAPLESS_SLACK = 64;             // frames of tolerance either side of the window
+const GAPLESS_SLACK = 64;             // frames of tolerance either side of the window (no header)
+const GAPLESS_EXACT_SLACK = 2;        // frames of tolerance on the header's own numbers
 
 const YIELD_EVERY = 1 << 20;          // samples between yields to the event loop
 
@@ -133,18 +134,42 @@ export function parseLameGapless(buf) {
 /**
  * What to cut from a decode of `decoded` frames whose source has `samples`
  * frames (both at DECODE_RATE). lame: {delay, padding} from the header or null.
- * @returns {head, tail, action: "exact" | "trimmed" | "padding" | "mismatch" | "unknown", excess}
+ *
+ * With the header the excess is classified exactly (GAPLESS_EXACT_SLACK
+ * frames either way), tail first so a kept padding is never taken for the
+ * head delay (padding is per file, anywhere in 0..1151):
+ *   padding or padding - 529      the decoder dropped the delay: tail only
+ *   delay + padding               nothing dropped: head delay + 529, the rest
+ *   delay + 529 or delay          the decoder dropped the padding: head only
+ *   anything else                 left alone ("mismatch")
+ * Without a header the window heuristic stands in (head 1105, padding up to
+ * one frame).
+ * @returns {head, tail, action: "exact" | "trimmed" | "padding" | "head" |
+ *   "mismatch" | "unknown", excess}
  */
 export function gaplessTrim(decoded, samples, lame = null) {
   if (!(samples > 0)) return { head: 0, tail: 0, action: "unknown", excess: null };
   const excess = decoded - samples;
   if (excess === 0) return { head: 0, tail: 0, action: "exact", excess };
-  const head = lame ? lame.delay + LAME_DECODER_DELAY : DEFAULT_GAPLESS_HEAD;
+  if (lame) {
+    const near = (x) => x > 0 && Math.abs(excess - x) <= GAPLESS_EXACT_SLACK;
+    const head = lame.delay + LAME_DECODER_DELAY;
+    if (near(lame.padding) || near(lame.padding - LAME_DECODER_DELAY)) {
+      return { head: 0, tail: excess, action: "padding", excess };
+    }
+    if (near(lame.delay + lame.padding)) {
+      const h = Math.min(head, excess);
+      return { head: h, tail: excess - h, action: "trimmed", excess };
+    }
+    if (near(head) || near(lame.delay)) return { head: excess, tail: 0, action: "head", excess };
+    return { head: 0, tail: 0, action: "mismatch", excess };
+  }
+  const head = DEFAULT_GAPLESS_HEAD;
   if (excess >= head - GAPLESS_SLACK && excess <= head + GAPLESS_FRAME + GAPLESS_SLACK) {
     const h = Math.min(head, excess);
     return { head: h, tail: excess - h, action: "trimmed", excess };
   }
-  if (excess > 0 && excess <= GAPLESS_FRAME + GAPLESS_SLACK && excess < head - GAPLESS_SLACK) {
+  if (excess > 0 && excess < head - GAPLESS_SLACK) {
     return { head: 0, tail: excess, action: "padding", excess };
   }
   return { head: 0, tail: 0, action: "mismatch", excess };
@@ -186,12 +211,13 @@ export async function loadTrack(ctx, source, file, opts = {}) {
   const samples = meta && meta.samples > 0 ? Math.round(meta.samples * scale) : null;
   const g = gaplessTrim(frames, samples, scale === 1 ? lame : null);
   const name = (meta && meta.file) || file;
-  if (g.action === "trimmed" || g.action === "padding") {
-    log(`gapless guard: ${name}: decode ${frames} frames, source ${samples}: trimmed head ${g.head} + tail ${g.tail}`
-      + (lame ? ` (LAME delay ${lame.delay}, padding ${lame.padding})` : " (no LAME header, default delay)"));
-  } else if (g.action === "mismatch") {
-    log(`gapless guard: ${name}: decode ${frames} frames, source ${samples}: ${g.excess} frames off, left as is`);
-  }
+  const how = lame ? `LAME delay ${lame.delay}, padding ${lame.padding}` : "no LAME header";
+  const said = {
+    exact: "exact, nothing to trim",
+    unknown: "source frame count unknown, left as is",
+    mismatch: `${g.excess} frames off, left as is`,
+  }[g.action] || `trimmed head ${g.head} + tail ${g.tail}`;
+  log(`gapless guard: ${name}: decode ${frames} frames, source ${samples ?? "n/a"}: ${said} (${how})`);
   const pcm = await bufferToPcm(decoded, g.head, g.tail);
   decoded = null;                            // drop the float copy now
   const offset = meta && Number.isFinite(meta.carry_offset_s) ? meta.carry_offset_s : 0;

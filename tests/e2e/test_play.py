@@ -391,16 +391,23 @@ def test_sync_drift_under_3ms_over_120s(proof_page, play_tracks):
 
 
 def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
-    """A decoder that leaves the encoder delay (1105 frames) and 576 frames of
-    padding in: the loader trims both, and the first click lands on the grid
-    (1 ms). Without the guard the same decode is ~25 ms late."""
+    """A decoder that leaves the encoder delay (576 + 529 = 1105 frames) and the
+    padding (here 1008 - 529 = 479) in: the loader reads both from the LAME
+    header, trims both, and the first click lands on the grid (1 ms). Without
+    the guard the same decode is ~25 ms late."""
     r = proof_page.evaluate("async (file) => {" + ENGINE + """
       const { Deck } = await import('/static/cabine/engine/deck.js');
       const { DeckVoice } = await import('/static/cabine/engine/deck-voice.js');
-      const sr = 44100, HEAD = 1105, TAIL = 576;
+      const { parseLameGapless } = await import('/static/cabine/engine/loader.js');
+      const sr = 44100;
       const net = networkSource();
       const meta = await net.getMeta(file);
-      const real = await new OfflineAudioContext(2, 1, sr).decodeAudioData(await net.getMp3(file));
+      const mp3 = await net.getMp3(file);
+      const lame = parseLameGapless(mp3);
+      // what a decoder that ignores the LAME header hands back: the encoder
+      // delay + 529 decoder frames at the head, the padding less 529 at the tail
+      const HEAD = lame.delay + 529, TAIL = lame.padding - 529;
+      const real = await new OfflineAudioContext(2, 1, sr).decodeAudioData(mp3.slice(0));
       const n = real.length;
       const padded = new AudioBuffer({ length: n + HEAD + TAIL, numberOfChannels: 2, sampleRate: sr });
       for (let c = 0; c < 2; c++) padded.getChannelData(c).set(real.getChannelData(c), HEAD);
@@ -428,12 +435,13 @@ def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
       };
       const guarded = await render(meta.samples);
       const unguarded = await render(null);
-      return { samples: meta.samples, realDecode: n, guarded, unguarded, logs };
+      return { samples: meta.samples, realDecode: n, guarded, unguarded, logs, lame, HEAD, TAIL };
     }""", play_tracks["click120"])
     print(f"\ngapless: real decode {r['realDecode']} vs source {r['samples']}; "
           f"guarded {r['guarded']['ms']:+.3f} ms, unguarded {r['unguarded']['ms']:+.3f} ms; {r['logs']}")
     g = r["guarded"]
-    assert g["gap"]["action"] == "trimmed" and g["gap"]["head"] == 1105 and g["gap"]["tail"] == 576, g
+    assert r["HEAD"] == 1105 and r["TAIL"] == 479, r["lame"]
+    assert g["gap"]["action"] == "trimmed" and g["gap"]["head"] == 1105 and g["gap"]["tail"] == 479, g
     assert g["frames"] == r["samples"], g
     assert abs(g["ms"]) < 1, g
     assert r["unguarded"]["ms"] > 20, "the control: an untrimmed decode really is late"
@@ -481,3 +489,34 @@ def test_strip_layout_and_playing_screenshot(engine, chromium, webkit, base_url,
         assert not page.errors, page.errors
     finally:
         ctx.close()
+
+
+def test_portrait_stands_the_strip_down(phone, base_url, play_tracks):
+    """Turned to portrait the strip draws nothing and keeps its layout and
+    tiles; back in landscape it carries on without pre-rendering again."""
+    a, b = play_tracks["tone_a"], play_tracks["tone_b"]
+    page = _open(phone, base_url, carry=(a, b))
+    r = load_both(page, a, b)
+    tap(page, r, "d1-play")
+    tap(page, r, "d2-play")
+    page.evaluate("() => document.fonts.ready")
+    page.wait_for_timeout(400)
+    stats = "() => ({ ...window.cabine.strip.stats, lights: window.cabine.bind.lightsRuns })"
+    s0 = page.evaluate(stats)
+    assert s0["prerenders"] >= 2 and s0["frames"] > 0, s0
+    page.set_viewport_size({"width": 390, "height": 844})
+    expect(page.locator(".cab-turn")).to_be_visible()
+    page.wait_for_timeout(300)
+    s1 = page.evaluate(stats)
+    page.wait_for_timeout(1000)
+    s2 = page.evaluate(stats)
+    assert s2["frames"] == s1["frames"], f"drawing while hidden: {s1} -> {s2}"
+    assert s2["lights"] == s1["lights"], f"lights refreshed while hidden: {s1} -> {s2}"
+    assert s2["prerenders"] == s0["prerenders"], f"re-rendered for the hidden strip: {s0} -> {s2}"
+    page.set_viewport_size({"width": 844, "height": 390})
+    page.wait_for_timeout(600)
+    s3 = page.evaluate(stats)
+    assert s3["prerenders"] == s0["prerenders"], f"re-rendered on the way back: {s0} -> {s3}"
+    assert s3["frames"] > s2["frames"], "drawing again in landscape"
+    assert page.evaluate("() => window.cabine.engine.decks.every(d => d.state.playing)")
+    assert not page.errors, page.errors

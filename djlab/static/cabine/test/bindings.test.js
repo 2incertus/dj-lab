@@ -20,7 +20,7 @@ class Voice {
 
 const grid = (bpm) => ({ bpm, first_beat_s: 0, downbeat_s: 0, reliable: true });
 
-function setup({ playing = false } = {}) {
+function setup({ playing = false, stripGone = null } = {}) {
   const log = [];
   const clock = { t: 0 };
   const decks = [1, 2].map(() => new Deck(new Voice(log), { now: () => clock.t, setTimeout: () => 0, clearTimeout: () => {} }));
@@ -58,7 +58,8 @@ function setup({ playing = false } = {}) {
       hotCues: new Array(8).fill(null), peaks: null };
   };
   let ready = true;
-  const b = makeBindings({ getRig: () => (ready ? rig : null), strip, board: () => board, store,
+  const b = makeBindings({ getRig: () => (ready ? rig : null),
+    strip: stripGone ? () => (stripGone.gone ? null : strip) : strip, board: () => board, store,
     source: {}, loadTrack });
   return { b, rig, decks, fx, mixer, sampler, strip, store, saved, board, lit, log, clock, loads,
     setReady: (v) => { ready = v; } };
@@ -228,9 +229,54 @@ test("lights_mirror_the_decks", async () => {
   assert.equal(lit.get("mark:d1-sync"), true, "deck 1 is the sync master");
   assert.equal(lit.get("mark:d2-sync"), false);
   assert.equal(lit.get("fx-on"), true);
+  assert.equal(lit.get("blink:fx-on"), true, "Beat FX ON/OFF flashes while on (manual)");
   call(b, "deck.fourBeatExit", true, "d1-4beat");
   b.refreshLights();
   assert.equal(lit.get("d1-in"), true, "IN / OUT lit while a loop plays");
   assert.equal(lit.get("d1-out"), true);
   assert.equal(decks[0].state.loop.active, true);
+});
+
+test("play_flashes_while_paused_and_cue_flashes_away_from_the_cue_point", async () => {
+  const { b, decks, lit, strip, clock } = setup();
+  strip.hl = "a.mp3"; await b.load(1);
+  call(b, "deck.playPause", true, "d1-play");      // play from the cue point ...
+  clock.t = 2;
+  call(b, "deck.playPause", true, "d1-play");      // ... pause 2 s later, away from it
+  b.refreshLights();
+  assert.equal(lit.get("d1-play"), true);
+  assert.equal(lit.get("blink:d1-play"), true, "paused: PLAY flashes");
+  assert.equal(lit.get("d1-cue"), true);
+  assert.equal(lit.get("blink:d1-cue"), true, "paused away from the cue point: CUE flashes");
+  call(b, "deck.shiftCue", true, "d1-cue");          // back to 0 = the cue point
+  b.refreshLights();
+  assert.equal(lit.get("blink:d1-cue"), false, "at the cue point: CUE steady");
+  assert.equal(lit.get("blink:d1-play"), true);
+  call(b, "deck.playPause", true, "d1-play");
+  b.refreshLights();
+  assert.equal(lit.get("d1-cue"), false, "playing: CUE dark");
+  assert.equal(lit.get("blink:d1-play"), false);
+  assert.equal(lit.get("d2-play"), false, "an empty deck shows nothing");
+  assert.equal(lit.get("d2-cue"), false);
+  assert.ok(decks[0].state.playing);
+});
+
+test("a_second_load_on_a_loading_deck_is_ignored", async () => {
+  const { b, strip, loads } = setup();
+  strip.hl = "a.mp3";
+  const first = b.load(1);
+  strip.hl = "b.mp3";
+  await b.load(1);                                   // while a.mp3 decodes
+  await first;
+  assert.deepEqual(loads, ["a.mp3"], "one decode at a time per deck");
+});
+
+test("leaving_for_the_caixa_mid_load_still_loads_the_deck", async () => {
+  const stripGone = { gone: false };
+  const { b, decks, strip } = setup({ stripGone });
+  strip.hl = "a.mp3";
+  const p = b.load(1);
+  stripGone.gone = true;                             // the board (and its strip) went away
+  await p;
+  assert.equal(decks[0].track.file, "a.mp3", "the deck still gets its track");
 });
