@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -643,8 +644,13 @@ def cabine_grid_fix(data: dict):
         raise HTTPException(404, "no grid yet")
     value = data.get("value")
     try:
-        fixed = gr.apply_fix(g, str(data.get("op", "")),
-                             None if value is None else float(value))
+        value = None if value is None else float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "value must be a number")
+    if value is not None and not math.isfinite(value):
+        raise HTTPException(400, "value must be a finite number")
+    try:
+        fixed = gr.apply_fix(g, str(data.get("op", "")), value)
     except (TypeError, ValueError) as e:
         raise HTTPException(400, str(e))
     gr.save_grid(src, fixed)

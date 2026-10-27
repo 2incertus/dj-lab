@@ -189,3 +189,41 @@ def test_login_next_rejects_offsite(crate, monkeypatch):
     # the login page validates next in JS too, before following it
     page = c.get("/login", params={"next": "//evil.com"}).text
     assert "location.search" in page and "safeNext" in page
+
+
+def test_grid_fix_rejects_non_finite_value(crate, client):
+    folder = crate / "sources" / "techno"
+    folder.mkdir()
+    src = folder / "t.wav"
+    src.write_bytes(b"x")
+    save_grid(src, {"bpm": 128.0, "first_beat_s": 0.25, "downbeat_s": 0.25,
+                    "beat_cv": 0.01, "reliable": True, "source": "beat_this",
+                    "fixed": False})
+    before = grid_path(src).read_bytes()
+    bodies = [json.dumps({"file": "t.wav", "op": op, "value": v})
+              for op in ("nudge", "downbeat") for v in ("nan", "inf", "-Infinity")]
+    bodies += ['{"file": "t.wav", "op": "nudge", "value": 1e999}',
+               '{"file": "t.wav", "op": "nudge", "value": NaN}',
+               '{"file": "t.wav", "op": "downbeat", "value": -Infinity}']
+    for body in bodies:
+        r = client.post("/api/cabine/grid/fix", content=body,
+                        headers={"Content-Type": "application/json"})
+        assert r.status_code == 400, body
+        assert grid_path(src).read_bytes() == before, body
+
+
+def test_library_tolerates_bad_sidecar(crate, client):
+    folder = crate / "sources" / "techno"
+    folder.mkdir()
+    src = folder / "t.wav"
+    src.write_bytes(b"x")
+    # a sidecar poisoned before the fix: json.dumps writes NaN, the API cannot
+    grid_path(src).write_text('{"bpm": 128.0, "first_beat_s": NaN, "downbeat_s": 0.25,'
+                              ' "beat_cv": 0.01, "reliable": true, "source": "x",'
+                              ' "fixed": true}')
+    (crate / "analysis.json").write_text(json.dumps(
+        [{"file": "t.wav", "duration_s": 200.0, "bpm": 128.0}]))
+    r = client.get("/api/cabine/library")
+    assert r.status_code == 200
+    assert r.json()["tracks"][0]["grid"] is None
+    assert client.get("/api/cabine/grid", params={"file": "t.wav"}).status_code == 404

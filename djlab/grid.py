@@ -12,6 +12,7 @@ downbeat); a corrected grid carries `fixed=True`.
 """
 
 import json
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -131,18 +132,31 @@ def grid_path(src: Path) -> Path:
     return src.parent / (src.name + ".grid.json")
 
 
+def _sane(g) -> bool:
+    """A grid whose numbers can be drawn (and serialized as strict JSON)."""
+    try:
+        nums = [float(g[k]) for k in ("bpm", "first_beat_s", "downbeat_s", "beat_cv")]
+    except (KeyError, TypeError, ValueError):
+        return False
+    return all(math.isfinite(x) for x in nums) and nums[0] > 0
+
+
 def load_grid(src: Path) -> Grid | None:
+    """The sidecar grid, or None if there is none or it is unusable
+    (e.g. NaN/Infinity written before fixes were checked)."""
     p = grid_path(Path(src))
     try:
-        return json.loads(p.read_text())
+        g = json.loads(p.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+    return g if isinstance(g, dict) and _sane(g) else None
 
 
 def save_grid(src: Path, g: Grid) -> None:
     p = grid_path(Path(src))
     tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(json.dumps(g, indent=2))
+    # allow_nan=False: never persist NaN/Infinity (ValueError instead)
+    tmp.write_text(json.dumps(g, indent=2, allow_nan=False))
     os.replace(tmp, p)
 
 
@@ -155,6 +169,12 @@ def ensure_grid(src: Path) -> Grid:
 
 
 def apply_fix(g: Grid, op: str, value: float | None = None) -> Grid:
+    if value is not None:
+        value = float(value)
+        if not math.isfinite(value):
+            # a NaN/inf nudge poisons the grid, and -inf never leaves the
+            # "move the downbeat forward by bars" loop below
+            raise ValueError(f"{op} needs a finite value")
     out = dict(g)
     period = 60.0 / g["bpm"]
     if op == "halve":

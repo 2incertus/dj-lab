@@ -81,3 +81,12 @@ def test_librosa_fallback_and_ensure_grid(wav_file, monkeypatch):
     assert abs(g["bpm"] - 128.0) < 0.5
     assert grid_path(p).exists()
     assert load_grid(p) == g
+
+
+@pytest.mark.parametrize("op", ["nudge", "downbeat"])
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_apply_fix_rejects_non_finite(op, bad):
+    g = {"bpm": 128.0, "first_beat_s": 0.25, "downbeat_s": 0.25, "beat_cv": 0.01,
+         "reliable": True, "source": "beat_this", "fixed": False}
+    with pytest.raises(ValueError):
+        apply_fix(g, op, bad)
