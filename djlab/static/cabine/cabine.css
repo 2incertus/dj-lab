@@ -228,6 +228,12 @@
 .cab-root[data-screen="board"] { padding: 0; min-height: 0; height: 100dvh; overflow: hidden; }
 .cab-body:has(.cab-board-screen) { overflow: hidden; overscroll-behavior: none; background: #0d0d0e; }
 
+/* iOS Safari decides double-tap zoom before any handler runs: touch-action is the
+   only reliable switch. manipulation on the document (taps still click, no zoom);
+   none on the board and everything in it (no scroll, no pinch, no double-tap zoom). */
+html, body, .cab-root { touch-action: manipulation; }
+.cab-board-screen, .cab-board-screen * { touch-action: none; }
+
 .cab-board-screen {
   position: fixed; inset: 0; background: #0d0d0e; color: #d6d6d6;
   touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;

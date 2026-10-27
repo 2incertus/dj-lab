@@ -53,6 +53,14 @@ def safe_next(value) -> str:
 @app.middleware("http")
 async def pin_gate(request: Request, call_next):
     path = request.url.path
+    if path.startswith("/static/cabine/"):
+        # Cloudflare caches .js/.css at the edge for hours; the Cabine shell
+        # must pick up every client change on the next launch (its own
+        # service worker handles offline). no-cache = always revalidate
+        # (StaticFiles sends ETag, so a revalidation is a cheap 304).
+        resp = await call_next(request)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
     if (not PIN_HASH or path in UNGATED
             or path.startswith(("/static/", "/favicon"))):
         return await call_next(request)

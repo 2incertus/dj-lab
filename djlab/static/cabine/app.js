@@ -437,3 +437,21 @@ app.ready = boot().catch((e) => {
     .replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</p>`;
   throw e;
 });
+
+// iOS double-tap-to-zoom backstop: a second tap within 350 ms and 30 px is
+// swallowed at touchend (the first tap's click already fired; board widgets use
+// pointer events, so knob double-tap reset is unaffected).
+(() => {
+  let lastT = 0, lastX = 0, lastY = 0;
+  document.addEventListener("touchend", (e) => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const now = performance.now();
+    if (now - lastT < 350 && Math.abs(t.clientX - lastX) < 30 && Math.abs(t.clientY - lastY) < 30) {
+      e.preventDefault();
+      lastT = 0;
+      return;
+    }
+    lastT = now; lastX = t.clientX; lastY = t.clientY;
+  }, { passive: false });
+})();

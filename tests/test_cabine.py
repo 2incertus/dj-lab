@@ -292,3 +292,11 @@ def test_cabine_proof_page_is_gated(crate, monkeypatch):
     assert page.status_code == 200
     assert "/static/cabine/engine/deck-voice.js" in page.text
     assert "/static/cabine/engine/loader.js" in page.text
+
+
+def test_cabine_static_assets_are_never_edge_cached(client):
+    r = client.get("/static/cabine/cabine.css")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    r = client.get("/static/style.css")
+    assert "cache-control" not in r.headers or r.headers["cache-control"] != "no-cache"
