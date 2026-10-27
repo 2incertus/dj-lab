@@ -713,6 +713,12 @@ def cabine_page():
     return FileResponse(STATIC / "cabine" / "cabine.html")
 
 
+@app.get("/cabine/proof")
+def cabine_proof_page():
+    """Dev-only engine proof: two decks, load, play, scrub, underruns."""
+    return FileResponse(STATIC / "cabine" / "proof.html")
+
+
 @app.get("/cabine/sw.js")
 def cabine_sw():
     return FileResponse(CABINE_SW, media_type="text/javascript",

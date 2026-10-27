@@ -253,3 +253,16 @@ def test_grid_fix_rejects_out_of_range_value(crate, client, op, value):
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old)
+
+
+def test_cabine_proof_page_is_gated(crate, monkeypatch):
+    monkeypatch.setattr(server, "PIN_HASH", hashlib.sha256(b"test-pin").hexdigest())
+    c = TestClient(server.app)
+    r = c.get("/cabine/proof", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/login?next=/cabine/proof"
+    c.cookies.set("dj_auth", server.PIN_HASH)
+    page = c.get("/cabine/proof")
+    assert page.status_code == 200
+    assert "/static/cabine/engine/deck-voice.js" in page.text
+    assert "/static/cabine/engine/loader.js" in page.text

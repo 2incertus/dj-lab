@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>A Cabine: engine proof</title>
+  <meta name="robots" content="noindex">
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      background: #141016; color: #eee6f0; font: 14px/1.35 system-ui, -apple-system, sans-serif;
+      -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%; }
+    h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
+    .cab-proof-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .cab-proof-decks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .cab-proof-decks { grid-template-columns: 1fr; } }
+    .cab-proof-deck { background: #221b26; border: 1px solid #3a3040; border-radius: 10px; padding: 10px;
+      display: grid; gap: 8px; }
+    .cab-proof-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    button, select { font: inherit; color: inherit; background: #3a3040; border: 1px solid #54465c;
+      border-radius: 7px; padding: 8px 12px; min-height: 40px; touch-action: manipulation; }
+    button.on { background: #7a3f8f; border-color: #a35bbd; }
+    button:disabled { opacity: .45; }
+    select { max-width: 100%; flex: 1 1 200px; }
+    input[type=range] { width: 100%; }
+    .cab-proof-jog { height: 64px; border-radius: 32px; background: repeating-linear-gradient(90deg,
+      #2d2433 0 10px, #3a3040 10px 20px); touch-action: none; display: grid; place-items: center;
+      color: #b9a8c2; font-size: 12px; }
+    .cab-proof-jog.held { outline: 2px solid #a35bbd; }
+    .cab-proof-stat { font: 12px/1.4 ui-monospace, Menlo, monospace; color: #cbbad4; white-space: pre-wrap; }
+    .cab-proof-warn { color: #ffb3b3; }
+  </style>
+</head>
+<body>
+  <h1>A Cabine: engine proof (dev only)</h1>
+  <div class="cab-proof-top">
+    <button id="cab-start">Start audio</button>
+    <span class="cab-proof-stat" id="cab-global">audio off</span>
+  </div>
+  <div class="cab-proof-decks" id="cab-decks"></div>
+
+  <template id="cab-deck-tpl">
+    <section class="cab-proof-deck">
+      <div class="cab-proof-row"><strong class="cab-name"></strong>
+        <select class="cab-pick"><option>loading library...</option></select>
+        <button class="cab-load" disabled>Load</button></div>
+      <div class="cab-proof-row">
+        <button class="cab-play" disabled>Play / pause</button>
+        <button class="cab-cue" disabled>Cue</button>
+        <button class="cab-sync" disabled>Sync</button>
+        <button class="cab-loop" disabled>4 beat / exit</button>
+        <button class="cab-jump-back" disabled>-4</button>
+        <button class="cab-jump-fwd" disabled>+4</button>
+      </div>
+      <label>Position <input class="cab-seek" type="range" min="0" max="1" step="0.0001" value="0" disabled></label>
+      <label>Tempo (right here = down on the FLX4 = faster) <input class="cab-tempo" type="range" min="0" max="1" step="0.0002" value="0.5" disabled></label>
+      <div class="cab-proof-jog" data-jog>scrub: hold and drag</div>
+      <div class="cab-proof-stat cab-stat">empty</div>
+    </section>
+  </template>
+
+  <script type="module">
+    import { Deck } from "/static/cabine/engine/deck.js";
+    import { DeckVoice } from "/static/cabine/engine/deck-voice.js";
+    import { loadTrack, networkSource } from "/static/cabine/engine/loader.js";
+
+    const source = networkSource();
+    const proof = { ctx: null, decks: [], voices: [], tracks: [], source };
+    window.cabineProof = proof;
+
+    const fmt = (s) => {
+      if (!Number.isFinite(s)) return "--:--";
+      const m = Math.floor(s / 60);
+      return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
+    };
+
+    let library = [];
+    try {
+      const r = await fetch("/api/cabine/library", { credentials: "same-origin" });
+      library = (await r.json()).tracks || [];
+    } catch (e) {
+      library = [];
+    }
+
+    const uis = [];
+    for (const name of ["Deck 1", "Deck 2"]) {
+      const el = document.getElementById("cab-deck-tpl").content.firstElementChild.cloneNode(true);
+      el.querySelector(".cab-name").textContent = name;
+      const pick = el.querySelector(".cab-pick");
+      pick.innerHTML = "";
+      for (const t of library) {
+        const o = document.createElement("option");
+        o.value = t.file;
+        o.textContent = `${t.title} (${fmt(t.duration_s)}, ${t.bpm ?? "?"} BPM)`;
+        pick.appendChild(o);
+      }
+      if (!library.length) pick.innerHTML = "<option>no tracks</option>";
+      document.getElementById("cab-decks").appendChild(el);
+      uis.push(el);
+    }
+    if (library.length > 1) uis[1].querySelector(".cab-pick").selectedIndex = 1;
+
+    async function start() {
+      if (proof.ctx) { await proof.ctx.resume(); return; }
+      if (navigator.audioSession) {
+        try { navigator.audioSession.type = "playback"; } catch (e) { /* older Safari */ }
+      }
+      const ctx = new AudioContext({ latencyHint: "interactive" });
+      proof.ctx = ctx;
+      await ctx.resume();
+      for (let i = 0; i < 2; i++) {
+        const voice = await DeckVoice.create(ctx);
+        voice.connect(ctx.destination);
+        const deck = new Deck(voice, { now: () => ctx.currentTime });
+        proof.voices.push(voice);
+        proof.decks.push(deck);
+        wire(uis[i], deck, voice, i);
+      }
+      document.getElementById("cab-start").textContent = "Audio on";
+      requestAnimationFrame(tick);
+    }
+
+    let wake = null;
+    async function keepAwake() {
+      const playing = proof.decks.some((d) => d.state.playing);
+      try {
+        if (playing && !wake && navigator.wakeLock) wake = await navigator.wakeLock.request("screen");
+        if (!playing && wake) { await wake.release(); wake = null; }
+      } catch (e) { /* not granted */ }
+    }
+
+    function wire(el, deck, voice, i) {
+      const $ = (s) => el.querySelector(s);
+      const other = () => proof.decks[1 - i];
+      const buttons = [".cab-play", ".cab-cue", ".cab-sync", ".cab-loop", ".cab-jump-back",
+        ".cab-jump-fwd", ".cab-seek", ".cab-tempo"];
+      $(".cab-load").disabled = !library.length;
+      $(".cab-load").onclick = async () => {
+        const file = $(".cab-pick").value;
+        $(".cab-load").disabled = true;
+        $(".cab-stat").textContent = `loading ${file}...`;
+        try {
+          const t0 = performance.now();
+          const track = await loadTrack(proof.ctx, source, file);
+          proof.tracks[i] = { file, ms: Math.round(performance.now() - t0) };
+          deck.load(track);
+          for (const b of buttons) $(b).disabled = false;
+        } catch (e) {
+          $(".cab-stat").textContent = `load failed: ${e.message}`;
+        }
+        $(".cab-load").disabled = false;
+      };
+      $(".cab-play").onclick = () => { deck.playPause(); keepAwake(); };
+      $(".cab-cue").onpointerdown = () => deck.cueDown();
+      $(".cab-cue").onpointerup = () => deck.cueUp();
+      $(".cab-cue").onpointercancel = () => deck.cueUp();
+      $(".cab-sync").onclick = () => deck.syncPress(other());
+      $(".cab-loop").onclick = () => deck.fourBeatExit();
+      $(".cab-jump-back").onclick = () => deck.beatJump(4);
+      $(".cab-jump-fwd").onclick = () => deck.beatJump(5);
+      $(".cab-tempo").oninput = (e) => deck.setTempo(Number(e.target.value));
+      const seek = $(".cab-seek");
+      seek.oninput = () => {
+        const s = Number(seek.value) * deck.duration;
+        deck._seekNow(s, proof.ctx.currentTime);   // dev page only: no position control on the FLX4
+      };
+      const jog = $("[data-jog]");
+      let lastX = null;
+      jog.onpointerdown = (e) => {
+        jog.setPointerCapture(e.pointerId);
+        lastX = e.clientX;
+        jog.classList.add("held");
+        deck.jogTouch(true);
+      };
+      jog.onpointermove = (e) => {
+        if (lastX === null) return;
+        const dx = e.clientX - lastX;
+        lastX = e.clientX;
+        if (dx) deck.jogTurn(dx * 0.75);          // 0.75 deg per px
+      };
+      const up = () => {
+        if (lastX === null) return;
+        lastX = null;
+        jog.classList.remove("held");
+        deck.jogTouch(false);
+      };
+      jog.onpointerup = up;
+      jog.onpointercancel = up;
+    }
+
+    function tick() {
+      const ctx = proof.ctx;
+      const T = ctx.currentTime;
+      proof.decks.forEach((d, i) => {
+        const el = uis[i];
+        const v = proof.voices[i];
+        el.querySelector(".cab-play").classList.toggle("on", d.state.playing);
+        el.querySelector(".cab-sync").classList.toggle("on", d.state.syncOn);
+        el.querySelector(".cab-loop").classList.toggle("on", d.state.loop.active);
+        el.querySelector(".cab-sync").disabled = !d.state.loaded || d.state.noGrid;
+        if (!d.state.loaded) return;
+        const s = d.posAt(T);
+        const seek = el.querySelector(".cab-seek");
+        if (document.activeElement !== seek && Number.isFinite(d.duration)) seek.value = String(s / d.duration);
+        const bpm = d.effectiveBpm();
+        const t = proof.tracks[i] || {};
+        el.querySelector(".cab-stat").innerHTML =
+          `${fmt(s)} / ${fmt(d.duration)}  ${bpm ? bpm.toFixed(2) : "?"} BPM  tempo ${d.state.tempoPct.toFixed(2)}%\n` +
+          `${d.state.noGrid ? "no reliable grid: sync off\n" : ""}` +
+          `loaded in ${t.ms ?? "?"} ms  ` +
+          `<span class="${v.underruns ? "cab-proof-warn" : ""}">underruns ${v.underruns}</span>`;
+      });
+      const mem = performance.memory ? `  heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)} MB` : "";
+      document.getElementById("cab-global").textContent =
+        `${ctx.state}, ${ctx.sampleRate} Hz, base latency ${((ctx.baseLatency || 0) * 1000).toFixed(1)} ms${mem}`;
+      requestAnimationFrame(tick);
+    }
+
+    document.getElementById("cab-start").onclick = () => start();
+    proof.start = start;
+  </script>
+</body>
+</html>
