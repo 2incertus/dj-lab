@@ -227,3 +227,29 @@ def test_library_tolerates_bad_sidecar(crate, client):
     assert r.status_code == 200
     assert r.json()["tracks"][0]["grid"] is None
     assert client.get("/api/cabine/grid", params={"file": "t.wav"}).status_code == 404
+
+
+@pytest.mark.parametrize("op,value", [("nudge", -1e20), ("downbeat", -1e300),
+                                      ("downbeat", 1e308), ("nudge", 1e308)])
+def test_grid_fix_rejects_out_of_range_value(crate, client, op, value):
+    import signal
+
+    def boom(*_):
+        raise TimeoutError("grid fix took over 5 s")
+    old = signal.signal(signal.SIGALRM, boom)
+    signal.alarm(5)
+    try:
+        folder = crate / "sources" / "techno"
+        folder.mkdir()
+        src = folder / "t.wav"
+        src.write_bytes(b"x")
+        save_grid(src, {"bpm": 128.0, "first_beat_s": 0.25, "downbeat_s": 0.25,
+                        "beat_cv": 0.01, "reliable": True, "source": "beat_this",
+                        "fixed": False})
+        before = grid_path(src).read_bytes()
+        r = client.post("/api/cabine/grid/fix", json={"file": "t.wav", "op": op, "value": value})
+        assert r.status_code == 400
+        assert grid_path(src).read_bytes() == before
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)

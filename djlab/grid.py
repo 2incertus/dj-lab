@@ -25,6 +25,8 @@ from .audio import load
 BEAT_THIS_SR = 22050
 BEATS_PER_BAR = 4          # the FLX4 / rekordbox grid is 4/4
 RUBATO_CV = 0.12           # same threshold as analyze.warp_verdict
+MAX_TRACK_S = 900          # A Cabine refuses longer files (sets, not tracks)
+MAX_NUDGE_MS = 60000       # a grid nudge is a correction, not a relocation
 
 Grid = TypedDict("Grid", {"bpm": float, "first_beat_s": float, "downbeat_s": float,
                           "beat_cv": float, "reliable": bool, "source": str,
@@ -32,9 +34,10 @@ Grid = TypedDict("Grid", {"bpm": float, "first_beat_s": float, "downbeat_s": flo
 
 
 def _wrap(t: float, period: float) -> float:
-    """Wrap a time into [0, period)."""
-    w = t - np.floor(t / period) * period
-    return 0.0 if w >= period else float(w)
+    """Wrap a time into [0, period). Python's float % is exact (fmod based)
+    and constant time for any finite input; it can round up to `period`."""
+    w = float(t) % period
+    return 0.0 if w >= period else w
 
 
 def _beat_cv(beat_times: np.ndarray) -> float:
@@ -49,9 +52,7 @@ def _beat_cv(beat_times: np.ndarray) -> float:
 def _snap(t: float, first: float, period: float) -> float:
     """Grid beat nearest `t`, moved forward by whole bars if it is negative."""
     s = first + round((t - first) / period) * period
-    while s < 0:
-        s += BEATS_PER_BAR * period
-    return s
+    return _wrap(s, BEATS_PER_BAR * period) if s < 0 else s
 
 
 def fit_constant_grid(beat_times: np.ndarray, downbeat_times: np.ndarray | None) -> Grid:
@@ -175,6 +176,10 @@ def apply_fix(g: Grid, op: str, value: float | None = None) -> Grid:
             # a NaN/inf nudge poisons the grid, and -inf never leaves the
             # "move the downbeat forward by bars" loop below
             raise ValueError(f"{op} needs a finite value")
+        if op == "nudge" and abs(value) > MAX_NUDGE_MS:
+            raise ValueError(f"nudge is limited to +-{MAX_NUDGE_MS} ms")
+        if op == "downbeat" and not 0 <= value <= MAX_TRACK_S:
+            raise ValueError(f"downbeat must be a time in 0..{MAX_TRACK_S} s")
     out = dict(g)
     period = 60.0 / g["bpm"]
     if op == "halve":
@@ -190,8 +195,8 @@ def apply_fix(g: Grid, op: str, value: float | None = None) -> Grid:
         shift = value / 1000.0
         out["first_beat_s"] = _wrap(g["first_beat_s"] + shift, period)
         out["downbeat_s"] = g["downbeat_s"] + shift
-        while out["downbeat_s"] < 0:
-            out["downbeat_s"] += BEATS_PER_BAR * period
+        if out["downbeat_s"] < 0:      # move forward by whole bars
+            out["downbeat_s"] = _wrap(out["downbeat_s"], BEATS_PER_BAR * period)
     elif op == "downbeat":
         if value is None:
             raise ValueError("downbeat needs the tapped time in seconds")

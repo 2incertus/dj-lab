@@ -26,9 +26,10 @@ from pathlib import Path
 import numpy as np
 
 from . import recipes as rc
+from . import grid as gr
 from .grid import load_grid
 
-MAX_TRACK_S = 900          # longer than 15 min is a set, not a track
+MAX_TRACK_S = gr.MAX_TRACK_S   # 900: longer than 15 min is a set, not a track
 CARRY = rc.ROOT / "carry"
 SR = 44100
 PEAK_RATE = 100

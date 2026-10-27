@@ -90,3 +90,57 @@ def test_apply_fix_rejects_non_finite(op, bad):
          "reliable": True, "source": "beat_this", "fixed": False}
     with pytest.raises(ValueError):
         apply_fix(g, op, bad)
+
+
+@pytest.fixture
+def deadline():
+    """Fail (not hang) if the test body runs longer than 5 s."""
+    import signal
+
+    def boom(*_):
+        raise TimeoutError("took over 5 s: a loop that never exits?")
+    old = signal.signal(signal.SIGALRM, boom)
+    signal.alarm(5)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, old)
+
+
+_G = {"bpm": 128.0, "first_beat_s": 0.25, "downbeat_s": 0.25, "beat_cv": 0.01,
+      "reliable": True, "source": "beat_this", "fixed": False}
+
+
+@pytest.mark.parametrize("op,bad", [
+    ("nudge", -1e20), ("nudge", -1e300), ("nudge", 1e308),
+    ("nudge", 60000.001), ("nudge", -60000.001),
+    ("downbeat", -1e300), ("downbeat", 1e308), ("downbeat", -0.001),
+    ("downbeat", 900.001),
+])
+def test_apply_fix_rejects_out_of_range(deadline, op, bad):
+    with pytest.raises(ValueError):
+        apply_fix(_G, op, bad)
+
+
+def test_apply_fix_range_edges_are_accepted(deadline):
+    period = 60 / 128.0
+    for ms in (60000, -60000):
+        g = apply_fix(_G, "nudge", ms)
+        assert 0 <= g["first_beat_s"] < period
+        assert 0 <= g["downbeat_s"]
+        # the downbeat moved by whole bars at most: still on the nudged grid
+        k = (g["downbeat_s"] - (0.25 + ms / 1000)) / (4 * period)
+        assert abs(k - round(k)) < 1e-4
+    # a tap at 0 s snaps to the beat at -0.219 s, moved forward one bar
+    assert apply_fix(_G, "downbeat", 0)["downbeat_s"] == pytest.approx(0.25 - period + 4 * period)
+    d = apply_fix(_G, "downbeat", 900)["downbeat_s"]
+    assert abs(d - 900) <= period / 2 and 0 <= d
+
+
+def test_wrap_and_snap_are_constant_time(deadline):
+    # no loop: any finite input returns at once, inside its range
+    for t in (-1e300, -1e20, -7.3, 0.0, 1e20, 1e300):
+        w = grid_mod._wrap(t, 0.46875)
+        assert 0 <= w < 0.46875
+    for t in (-1e20, -50.0, -0.1):
+        s = grid_mod._snap(t, 0.25, 0.46875)
+        assert 0 <= s < 4 * 0.46875
