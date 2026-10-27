@@ -19,6 +19,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from . import analyze as an
+from . import cabine as cab
+from . import grid as gr
 from . import recipes as rc
 
 app = FastAPI(title="dj-lab")
@@ -27,18 +29,33 @@ STATIC = Path(__file__).parent / "static"
 # PIN gate (homelab pattern): PIN_HASH env = sha256 of the PIN, cookie
 # carries the hash itself. Empty PIN_HASH disables auth for local dev.
 PIN_HASH = os.getenv("PIN_HASH", "")
+# the installed Cabine app must reach its service worker and manifest
+# before the PIN: browsers fetch both without cookies
+UNGATED = ("/login", "/auth", "/health", "/cabine/sw.js", "/cabine/manifest.webmanifest")
+
+_SAFE_NEXT = re.compile(r"/(?![/\\])[^\x00-\x20\x7f\\]*")
+
+
+def safe_next(value) -> str:
+    """Where to go after the PIN: a same-site path, else "/". Rejects
+    "//host" and "/\\host" (both leave the site) and anything with
+    whitespace, control characters or backslashes."""
+    v = value if isinstance(value, str) else ""
+    return v if _SAFE_NEXT.fullmatch(v) else "/"
 
 
 @app.middleware("http")
 async def pin_gate(request: Request, call_next):
     path = request.url.path
-    if (not PIN_HASH or path in ("/login", "/auth", "/health")
+    if (not PIN_HASH or path in UNGATED
             or path.startswith(("/static/", "/favicon"))):
         return await call_next(request)
     if request.cookies.get("dj_auth") == PIN_HASH:
         return await call_next(request)
     if path.startswith(("/api/", "/audio/")):
         return JSONResponse({"detail": "auth required"}, status_code=401)
+    if path == "/cabine" or path.startswith("/cabine/"):
+        return RedirectResponse(f"/login?next={safe_next(path)}", status_code=307)
     return RedirectResponse("/login", status_code=307)
 
 
@@ -83,11 +100,15 @@ p{opacity:0.6;font-size:13px}
 <p>enter the pin to reach the pressing plant</p>
 </form><script>
 const f=document.getElementById("f"),pin=document.getElementById("pin");
+const safeNext=v=>typeof v==="string"&&/^\\/(?![\\/\\\\])[^\\x00-\\x20\\x7f\\\\]*$/.test(v)?v:"/";
+const next=safeNext(new URLSearchParams(location.search).get("next"));
 f.addEventListener("submit",async e=>{e.preventDefault();
   const r=await fetch("/auth",{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({pin:pin.value})});
-  if(r.ok)location.href="/";else{pin.value="";pin.placeholder="nope"}});
+    body:JSON.stringify({pin:pin.value,next})});
+  if(r.ok){const j=await r.json().catch(()=>({}));
+    location.href=safeNext(j.next||next)}
+  else{pin.value="";pin.placeholder="nope"}});
 pin.addEventListener("input",()=>{if(pin.value.length>=4)f.requestSubmit()});
 </script></body></html>"""
 
@@ -104,7 +125,7 @@ async def auth(request: Request):
     if not PIN_HASH or digest != PIN_HASH:
         raise HTTPException(401, "wrong pin")
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
-    resp = JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True, "next": safe_next(body.get("next"))})
     resp.set_cookie("dj_auth", PIN_HASH, max_age=30 * 24 * 3600,
                     httponly=True, samesite="lax", secure=https)
     return resp
@@ -534,6 +555,100 @@ def post_settings(num: int, data: dict):
         raise HTTPException(404, "no such blend")
     rc.save_settings(num, data)
     return {"saved": True}
+
+
+# ---- A Cabine: the phone FLX4 ------------------------------------------
+
+CABINE_SW = Path(__file__).parent / "cabine_sw.js"
+CABINE_MANIFEST = {
+    "name": "A Cabine",
+    "short_name": "Cabine",
+    "description": "A DDJ-FLX4 in your pocket, for practice on the train",
+    "start_url": "/cabine",
+    "scope": "/cabine",
+    "display": "fullscreen",
+    "orientation": "landscape",
+    "background_color": "#2A0A2E",
+    "theme_color": "#2A0A2E",
+    "icons": [
+        {"src": "/static/icon-180.png?v=3", "sizes": "180x180", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/static/icon-192.png?v=3", "sizes": "192x192", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/static/icon-512.png?v=3", "sizes": "512x512", "type": "image/png",
+         "purpose": "any maskable"},
+    ],
+}
+
+
+def _cabine_src(file) -> Path:
+    src = rc.find_file(Path(str(file or "")).name) if file else None
+    if not src:
+        raise HTTPException(404, "no such track")
+    return src
+
+
+@app.get("/cabine")
+def cabine_page():
+    return FileResponse(STATIC / "cabine" / "cabine.html")
+
+
+@app.get("/cabine/sw.js")
+def cabine_sw():
+    return FileResponse(CABINE_SW, media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/cabine",
+                                 "Cache-Control": "no-cache"})
+
+
+@app.get("/cabine/manifest.webmanifest")
+def cabine_manifest():
+    return JSONResponse(CABINE_MANIFEST, media_type="application/manifest+json")
+
+
+@app.get("/api/cabine/library")
+def cabine_library():
+    return {"tracks": cab.library()}
+
+
+@app.get("/api/cabine/carry")
+def cabine_carry(file: str):
+    return FileResponse(cab.carry_mp3(_cabine_src(file)), media_type="audio/mpeg")
+
+
+@app.get("/api/cabine/peaks")
+def cabine_peaks(file: str):
+    return FileResponse(cab.peaks(_cabine_src(file)),
+                        media_type="application/octet-stream")
+
+
+@app.get("/api/cabine/grid")
+def cabine_grid(file: str):
+    g = gr.load_grid(_cabine_src(file))
+    if g is None:
+        raise HTTPException(404, "no grid yet")
+    return g
+
+
+@app.post("/api/cabine/grid")
+def cabine_grid_run(data: dict):
+    src = _cabine_src(data.get("file"))
+    return {"job": _run_job(f"beat grid: {src.name}", lambda: gr.ensure_grid(src))}
+
+
+@app.post("/api/cabine/grid/fix")
+def cabine_grid_fix(data: dict):
+    src = _cabine_src(data.get("file"))
+    g = gr.load_grid(src)
+    if g is None:
+        raise HTTPException(404, "no grid yet")
+    value = data.get("value")
+    try:
+        fixed = gr.apply_fix(g, str(data.get("op", "")),
+                             None if value is None else float(value))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    gr.save_grid(src, fixed)
+    return fixed
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
