@@ -57,25 +57,42 @@
 // | Split cue         | One stereo out: left = mono(headphones), right =           | S      |
 // |                   | mono(master). Recorder taps the master, never the cue.     |        |
 //
+// | Output Level      | rekordbox Preferences > Mixer > [Output Level] (internal   | R, B   |
+// | (headroom)        | mixer: -21 .. -3 dB / NONE) "Adjust the output level of    |        |
+// |                   | decks ... If the level is too high, clipping is likely ... |        |
+// |                   | Clipping will enable the limiter" [R p.242]. No default is |        |
+// |                   | stated: OUTPUT_LEVEL_DB = -6 dB on each deck before TRIM.  |        |
+// | Peak limiter      | FLX4 [Master output] > [Peak Limiter] [M p.80] and the      | M, R, B|
+// |                   | limiter above: a zero-latency soft clipper (WaveShaper,    |        |
+// |                   | transparent to CLIP_KNEE 0.7 = -3.1 dBFS, tanh above, held |        |
+// |                   | under CLIP_CEILING 0.99) after MASTER LEVEL (so masterTap and the     |        |
+// |                   | right ear never pass 1.0) and after HEADPHONES LEVEL (left |        |
+// |                   | ear). No look-ahead, so the split cue stays sample-aligned.|        |
+//
 // Changed from spec:
 // - Channel level meters: the spec says post-fader; the manual and the
 //   rekordbox mixer panel both say before the channel fader. level() is
 //   pre-fader.
-// Not modelled (flagged): the master Peak Limiter preference (a
-// DynamicsCompressor adds ~6 ms of look-ahead to the right ear only, which
-// would skew the split cue; its default is not stated either), Fader Start
-// (SHIFT + fader), Smart Fader, Smart CFX, crossfader REVERSE, mic.
+// Not modelled (flagged): a look-ahead limiter (a DynamicsCompressor adds
+// ~6 ms of look-ahead, which would skew the split cue; the soft clipper
+// stands in for it), Fader Start (SHIFT + fader), Smart Fader, Smart CFX,
+// crossfader REVERSE, mic.
 //
 // Graph per channel:
-//   input(TRIM) -> isolator(LOW | MID | HIGH) -> CFX biquad -> post (meter, CUE send)
+//   input(OUTPUT_LEVEL) -> TRIM -> isolator(LOW | MID | HIGH) -> CFX biquad -> post (meter, CUE send)
 //   post -> fader -> crossfader -> FX insert (channel) -> bus
 // Master: bus -> FX insert ("master" = the FLX4 lever's 1&2, see fx.js) -> masterSum
-//   (+ sampler) -> MASTER LEVEL -> masterTap -> mono -> merger input 1 (right)
+//   (+ sampler) -> MASTER LEVEL -> clipper -> masterTap -> mono -> merger input 1 (right)
 // Phones: (CUE'd channels + MASTER CUE) * mixCue + masterSum * mixMaster
-//   -> HEADPHONES LEVEL -> mono -> merger input 0 (left)
+//   -> HEADPHONES LEVEL -> clipper -> mono -> merger input 0 (left)
 //
 // Pure math at the top imports into Node (no Web Audio at import time).
 
+export const OUTPUT_LEVEL_DB = -6;
+export const CLIP_KNEE = 0.7;
+export const CLIP_CEILING = 0.99;              // -0.09 dBFS: stays under 1.0 in float32 too
+export const CLIP_RANGE = 16;                  // the clipper's curve covers +-16 (+24 dBFS)
+export const CLIP_CURVE_POINTS = 16385;
 export const TRIM_MAX_DB = 9;
 export const EQ_MAX_DB = 6;
 export const EQ_BANDS = ["hi", "mid", "low"];
@@ -165,6 +182,25 @@ export function phonesMixGains(k01) {
   return [Math.cos((k * Math.PI) / 2), Math.sin((k * Math.PI) / 2)];
 }
 
+/** The clipper: identity up to CLIP_KNEE, then a tanh knee (slope 1 at the
+ *  knee) that approaches CLIP_CEILING. Odd and monotonic. */
+export function softClip(x) {
+  const a = Math.abs(x);
+  if (a <= CLIP_KNEE) return x;
+  const h = CLIP_CEILING - CLIP_KNEE;
+  const y = CLIP_KNEE + h * Math.tanh((a - CLIP_KNEE) / h);
+  return x < 0 ? -y : y;
+}
+
+/** WaveShaper curve: point i maps input CLIP_RANGE * (2i / (n - 1) - 1)
+ *  (the shaper's input is scaled by 1 / CLIP_RANGE first). Linear
+ *  interpolation reproduces the identity part exactly. */
+export function softClipCurve(n = CLIP_CURVE_POINTS) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) c[i] = softClip(CLIP_RANGE * ((2 * i) / (n - 1) - 1));
+  return c;
+}
+
 /** Linear peak -> dBFS (for meters). */
 export function levelDb(lin) {
   return lin > 0 ? 20 * Math.log10(lin) : -Infinity;
@@ -205,6 +241,16 @@ function lr4(ctx, type, freq, from) {
   return b;
 }
 
+/** pre-scale + WaveShaper: no latency (oversample "none"). */
+function clipper(ctx, curve) {
+  const pre = gainNode(ctx, 1 / CLIP_RANGE);
+  const ws = ctx.createWaveShaper();
+  ws.curve = curve;
+  ws.oversample = "none";
+  pre.connect(ws);
+  return { input: pre, output: ws };
+}
+
 class Insert {
   constructor(ctx) {
     this.send = gainNode(ctx);
@@ -220,7 +266,9 @@ class Channel {
     this.n = n;
     this.state = { trim: DEFAULTS.trim, hi: DEFAULTS.eq, mid: DEFAULTS.eq, low: DEFAULTS.eq,
       cfx: DEFAULTS.cfx, fader: DEFAULTS.fader, cue: DEFAULTS.cue };
+    const level = gainNode(ctx, dbToGain(OUTPUT_LEVEL_DB));
     const trim = gainNode(ctx, trimGain(DEFAULTS.trim));
+    level.connect(trim);
     // isolator: LOW = LR4 low-pass at f1 (+ allpass at f2 to match the other
     // bands' phase), MID = LR4 high-pass f1 then low-pass f2, HIGH = high-pass f1 and f2
     const lowLp = lr4(ctx, "lowpass", EQ_CROSSOVER_LOW_HZ, trim);
@@ -251,7 +299,7 @@ class Channel {
     this.insert = new Insert(ctx);
     post.connect(fader).connect(xf).connect(this.insert.send);
     this.insert.ret.connect(mixer._bus);
-    this.input = trim;
+    this.input = level;
     this._nodes = { trim, bands, cfx, post, meter, cue, fader, xf };
     this._meterBuf = new Float32Array(meter.fftSize);
     this._cfxType = "off";
@@ -345,7 +393,11 @@ export class Mixer {
     this._masterGain = gainNode(ctx, levelGain(DEFAULTS.masterLevel));
     /** Post MASTER LEVEL, pre split: what the recorder records. */
     this.masterTap = gainNode(ctx);
-    this._masterSum.connect(this._masterGain).connect(this.masterTap);
+    const curve = softClipCurve();
+    const mClip = clipper(ctx, curve);
+    this._masterSum.connect(this._masterGain).connect(mClip.input);
+    mClip.output.connect(this.masterTap);
+    this._masterClip = mClip.output;
 
     this._masterCue = gainNode(ctx, DEFAULTS.masterCue ? 1 : 0);
     this._masterSum.connect(this._masterCue).connect(this._cueBus);
@@ -360,7 +412,9 @@ export class Mixer {
     this.output = ctx.createChannelMerger(2);
     const leftMono = gainNode(ctx, 1, 1);
     const rightMono = gainNode(ctx, 1, 1);
-    this._phonesGain.connect(leftMono).connect(this.output, 0, 0);
+    const pClip = clipper(ctx, curve);
+    this._phonesGain.connect(pClip.input);
+    pClip.output.connect(leftMono).connect(this.output, 0, 0);
     this.masterTap.connect(rightMono).connect(this.output, 0, 1);
     this.setCrossfader(DEFAULTS.crossfader);
   }

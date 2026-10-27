@@ -31,10 +31,13 @@
 // | Flanger              | Sweep cycle = fraction x 16 beats (4 .. 64 beats),     | B      |
 // |                      | 1 .. 5 ms modulated delay, no feedback (Web Audio      |        |
 // |                      | clamps delays inside a cycle to 128 frames).           |        |
-// | Roll                 | Deck.roll(fraction) on the target deck while on        | S, R3  |
-// |                      | (1&2: every playing deck), roll(null) on off, on a     |        |
-// |                      | lever move and on leaving Roll. LEVEL is ignored: the  |        |
-// |                      | deck plays one stream, so the roll replaces the sound. |        |
+// | Roll                 | Deck.roll(fraction) on the target deck while on        | S, R3, |
+// |                      | (1&2: both decks), roll(null) on off, on a lever move  | B      |
+// |                      | and on leaving Roll. Held: a target deck that is       |        |
+// |                      | paused rolls as soon as it starts playing; pausing     |        |
+// |                      | ends its roll and the next play rolls again. LEVEL is  |        |
+// |                      | ignored: the deck plays one stream, so the roll        |        |
+// |                      | replaces the sound.                                    |        |
 //
 // Not modelled (flagged): SHIFT + BEAT < (BPM Tap mode) and SHIFT + BEAT >
 // (back to Auto), SHIFT + ON/OFF (Release FX), multi/single mode, the
@@ -264,13 +267,16 @@ export class BeatFx {
     const [a, b] = this.decks;
     if (this.state.target === "1") return a ? [a] : [];
     if (this.state.target === "2") return b ? [b] : [];
-    return this.decks.filter((d) => d && d.state && d.state.playing);
+    return this.decks.filter((d) => d);
   }
 
+  /** Hold Roll on the target decks. A deck rolls while it plays and starts
+   *  rolling when it starts playing (Deck.roll holds); only decks that took
+   *  the hold (loaded, reliable grid) are kept, so off releases exactly them. */
   _rollOn() {
     const decks = this._rolling.length ? this._rolling : this._targetDecks();
     for (const d of decks) d.roll(this.state.fraction);
-    this._rolling = decks;
+    this._rolling = decks.filter((d) => d.rollHold === this.state.fraction);
   }
 
   _rollOff() {

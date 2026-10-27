@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import {
   trimGain, eqGainDb, dbToGain, cfxFilter, crossfaderGains, faderGain, phonesMixGains,
   levelGain, TRIM_MAX_DB, EQ_MAX_DB, CFX_DEAD_ZONE, CF_CUT_LAG, EQ_BANDS,
+  OUTPUT_LEVEL_DB, CLIP_KNEE, softClip, softClipCurve, CLIP_RANGE,
   Mixer, MIXER_ACTIONS, CHANNEL_ACTIONS,
 } from "../engine/mixer.js";
 import { BeatFx, FX_NAMES, FX_FRACTIONS, FX_TARGETS, BEATFX_ACTIONS, fxBeatSeconds } from "../engine/fx.js";
 import { Sampler, SAMPLER_PADS, SAMPLER_ACTIONS } from "../engine/sampler.js";
-import { FakeContext, FakeDeck } from "./fake-audio.js";
+import { Deck } from "../engine/deck.js";
+import { FakeContext, FakeDeck, FakeVoice } from "./fake-audio.js";
 
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
 const db = (g) => 20 * Math.log10(g);
@@ -105,6 +107,41 @@ test("fader_and_level_tapers", () => {
   assert.deepEqual([c0, m0], [1, 0], "MIX full left: cue only");
   assert.ok(near(c1, 0, 1e-12) && m1 === 1, "MIX full right: master only");
   assert.ok(near(cc, mc) && cc > 0.5, "center blends both");
+});
+
+test("output_level_headroom_and_soft_clip", () => {
+  // rekordbox Preferences > Mixer > Output Level, internal mixer: -21 .. -3 dB / NONE
+  assert.ok([-21, -18, -15, -12, -9, -6, -3].includes(OUTPUT_LEVEL_DB), `${OUTPUT_LEVEL_DB}`);
+  assert.equal(OUTPUT_LEVEL_DB, -6);
+  for (const x of [0, 0.1, -0.3, CLIP_KNEE, -CLIP_KNEE]) assert.equal(softClip(x), x, `transparent at ${x}`);
+  let prev = -Infinity;
+  for (let x = -CLIP_RANGE; x <= CLIP_RANGE; x += 0.01) {
+    const y = softClip(x);
+    assert.ok(Math.abs(y) < 1, `ceiling at ${x}: ${y}`);
+    assert.ok(y >= prev, `monotonic at ${x}`);
+    assert.ok(Math.abs(y + softClip(-x)) < 1e-12, "odd");
+    prev = y;
+  }
+  assert.ok(softClip(1) > 0.85 && softClip(2) > 0.95, "loud peaks are squeezed, not crushed");
+  const curve = softClipCurve(1025);
+  assert.equal(curve.length, 1025);
+  assert.equal(curve[512], 0);
+  assert.ok(Math.abs(curve[512 + 32] - softClip(CLIP_RANGE * 32 / 512)) < 1e-6);
+});
+
+test("mixer_has_headroom_on_every_channel_and_clippers_on_both_ears", () => {
+  const ctx = new FakeContext();
+  const m = new Mixer(ctx);
+  for (const n of [1, 2]) {
+    const ch = m.channel(n);
+    assert.ok(Math.abs(ch.input.gain.value - dbToGain(OUTPUT_LEVEL_DB)) < 1e-12, "deck output level");
+    assert.ok(ch.input.connectedTo(ch._nodes.trim));
+  }
+  const shapers = ctx.of("waveshaper");
+  assert.equal(shapers.length, 2, "one clipper per ear");
+  for (const w of shapers) assert.ok(w.curve && w.curve.length > 1000);
+  assert.ok(m._masterClip.connectedTo(m.masterTap) || m._masterClip.outputs.some((o) => o.dest === m.masterTap),
+    "the recorder taps after the master clipper");
 });
 
 // ---- Mixer graph (fake context: wiring, not sound) ---------------------------
@@ -218,7 +255,7 @@ test("fx_off_closes_the_input_and_keeps_the_tail", () => {
   assert.equal(fx.state.on, false);
 });
 
-test("roll_rolls_the_target_deck_and_master_rolls_every_playing_deck", () => {
+test("roll_rolls_the_target_deck_and_master_holds_both_decks", () => {
   const decks = [new FakeDeck(true), new FakeDeck(true)];
   const { fx } = fxRig({ decks });
   for (let i = 0; i < 4; i++) fx.select(1);       // Roll
@@ -236,11 +273,100 @@ test("roll_rolls_the_target_deck_and_master_rolls_every_playing_deck", () => {
   fx.setTarget("master");
   fx.setOn(true);
   assert.deepEqual(decks[1].rolls.slice(-1), [1]);
-  assert.deepEqual(decks[0].rolls, [], "a stopped deck does not roll");
+  assert.deepEqual(decks[0].rolls, [1], "a stopped deck takes the hold (rolls when it plays)");
   fx.setTarget("1");                              // moving the lever ends the old roll
   assert.deepEqual(decks[1].rolls.slice(-1), [null]);
+  assert.deepEqual(decks[0].rolls.slice(-2), [null, 1], "then holds on deck 1 alone");
   fx.select(1);                                   // leaving Roll ends it
+  assert.deepEqual(decks[0].rolls.slice(-1), [null]);
   fx.setOn(false);
+});
+
+test("roll_releases_only_decks_that_took_the_hold", () => {
+  const decks = [new FakeDeck(true, false), new FakeDeck(true)];   // deck 1 has no grid
+  const { fx } = fxRig({ decks });
+  for (let i = 0; i < 4; i++) fx.select(1);
+  fx.setTarget("master");
+  fx.setOn(true);
+  assert.deepEqual(fx._rolling, [decks[1]]);
+  fx.setOn(false);
+  assert.deepEqual(decks[0].rolls, [1], "no release sent to a deck that never rolled");
+  assert.deepEqual(decks[1].rolls, [1, null]);
+});
+
+// Beat FX Roll against real decks (fake voice): the pause paths.
+function rollRig() {
+  const c = { t: 0 };
+  const now = () => c.t;
+  const mk = () => {
+    const v = new FakeVoice();
+    const d = new Deck(v, { now, setTimeout: () => null, clearTimeout: () => {} });
+    d.load({ pcm: { left: new Int16Array(0), right: new Int16Array(0), sampleRate: 44100 },
+      grid: { bpm: 120, first_beat_s: 0, downbeat_s: 0, beat_cv: 0.02, reliable: true },
+      meta: { duration_s: 300, bpm: 120 }, hotCues: null });
+    return { v, d };
+  };
+  const A = mk(), B = mk();
+  const ctx = new FakeContext();
+  const fx = new BeatFx(ctx, new Mixer(ctx), () => 120, { decks: [A.d, B.d] });
+  for (let i = 0; i < 4; i++) fx.select(1);       // Roll, 1 beat, CH 1
+  return { c, A, B, fx };
+}
+
+test("roll_on_while_paused_starts_when_the_deck_plays", () => {
+  const { c, A, fx } = rollRig();
+  A.v.report(10.1, 0);
+  fx.setOn(true);
+  assert.equal(A.d.state.roll, null, "nothing rolls on a paused deck");
+  assert.deepEqual(A.v.loop, [null, null]);
+  fx.beat(-1);                                    // BEAT while paused: still nothing
+  assert.equal(A.d.state.roll, null);
+  c.t = 1;
+  A.d.playPause();                                // PLAY: the held roll starts
+  assert.deepEqual(A.d.state.roll, { beats: 0.75, in: 10.0, out: 10.375 });
+  assert.deepEqual(A.v.loop, [10.0, 10.375]);
+  c.t = 2;
+  fx.setOn(false);
+  assert.equal(A.d.state.roll, null);
+  assert.deepEqual(A.v.loop, [null, null]);
+  assert.ok(Math.abs(A.d.posAt() - 11.1) < 0.001, `slip ${A.d.posAt()}`);
+  A.d.playPause(); A.d.playPause();               // off is off: play again does not roll
+  assert.equal(A.d.state.roll, null);
+});
+
+test("pause_during_roll_stops_it_and_play_rolls_again", () => {
+  const { c, A, fx } = rollRig();
+  A.d.playPause();
+  A.v.report(10.1, 0);
+  fx.setOn(true);
+  assert.deepEqual(A.d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  c.t = 0.6;                                      // rolled back to 10.2
+  A.d.playPause();                                // pause: the roll ends where it is
+  assert.equal(A.d.state.roll, null);
+  assert.equal(A.d.state.loop.active, false);
+  assert.deepEqual(A.v.loop, [null, null]);
+  assert.ok(Math.abs(A.d.posAt() - 10.2) < 1e-9, `stays at ${A.d.posAt()}`);
+  assert.equal(fx.state.on, true);
+  c.t = 5;
+  A.d.playPause();                                // play: Roll is still on, so it rolls
+  assert.deepEqual(A.d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  c.t = 5.3;
+  fx.setOn(false);
+  assert.ok(Math.abs(A.d.posAt() - 10.5) < 0.001, `slip ${A.d.posAt()}`);
+});
+
+test("back_cue_during_roll_releases_the_loop", () => {
+  const { c, A, fx } = rollRig();
+  A.v.report(4, 0);
+  A.d.cueDown(); A.d.cueUp();                     // cue at 4.0
+  A.d.playPause();
+  c.t = 6; A.v.report(10.1, 6);
+  fx.setOn(true);
+  A.d.cueDown();                                  // Back Cue while rolling
+  assert.equal(A.d.state.roll, null);
+  assert.deepEqual(A.v.loop, [null, null], "no roll loop left armed at the cue");
+  assert.equal(A.d.state.playing, false);
+  A.d.cueUp();
 });
 
 test("every beat fx action is a method", () => {

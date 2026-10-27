@@ -553,10 +553,35 @@ test("roll_with_no_reliable_grid_is_a_noop", () => {
   assert.equal(v.calls.length, n);
 });
 
-test("roll_on_a_paused_deck_is_a_noop", () => {
-  const { v, d } = setup(grid(120));
+test("roll_on_a_paused_deck_waits_for_play", () => {
+  const { c, v, d } = setup(grid(120));
   v.report(10.1, 0);
   d.roll(1);
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(d.rollHold, 1);
+  c.t = 1;
+  d.playPause();
+  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  d.roll(null);
+  assert.equal(d.rollHold, null);
+});
+
+test("hot_cue_start_and_cue_preview_roll_while_held", () => {
+  const { c, v, d } = setup(grid(120));
+  v.report(10.1, 0);
+  d.roll(1);
+  d.hotCue(0);                                  // sets A at 10.0 (paused: no start)
+  assert.equal(d.state.roll, null);
+  d.hotCue(0);                                  // lit pad: playback starts from A
+  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  c.t = 1;
+  d.cueDown();                                  // Back Cue: paused, roll over
+  assert.equal(d.state.roll, null);
+  d.cueUp();
+  d.cueDown();                                  // Cue Point Sampler: plays while held
+  assert.notEqual(d.state.roll, null);
+  d.cueUp();                                    // release: back to the cue, no loop left
   assert.equal(d.state.roll, null);
   assert.deepEqual(v.loop, [null, null]);
 });

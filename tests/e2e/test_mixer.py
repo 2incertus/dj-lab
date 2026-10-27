@@ -106,7 +106,8 @@ def test_low_kill_removes_sub(proof_page):
       };
     }""")
     print(f"\nlow kill: {r}")
-    assert abs(r["sub"] - 20 * __import__("math").log10(0.5)) < 0.5, f"isolator not flat at center: {r}"
+    # 0.5 sine through OUTPUT_LEVEL_DB (-6) headroom, crossfader full to channel 1
+    assert abs(r["sub"] - (20 * __import__("math").log10(0.5) - 6)) < 0.5, f"wrong level at center: {r}"
     assert r["sub"] - r["subKilled"] > 40, f"60 Hz only dropped {r['sub'] - r['subKilled']:.1f} dB"
     assert abs(r["hi"] - r["hiWithLowKilled"]) < 0.5, f"low kill touched 5 kHz: {r}"
     assert abs(r["sub3"] - r["sub"] - 6) < 0.5, f"full LOW boost is not +6 dB: {r}"
@@ -246,7 +247,7 @@ def test_beat_fx_roll_slips_back_on_the_grid(proof_page, carried):
       const out = await ctx.startRendering();
       const R = out.getChannelData(1);
       const peak = (t) => { let p = 0; for (let i = Math.round((t - 0.01) * sr); i < Math.round((t + 0.03) * sr); i++) p = Math.max(p, Math.abs(R[i])); return p; };
-      const onset = (t) => { for (let i = Math.round((t - 0.05) * sr); i < R.length; i++) if (Math.abs(R[i]) > 0.2) return i / sr; return -1; };
+      const onset = (t) => { for (let i = Math.round((t - 0.05) * sr); i < R.length; i++) if (Math.abs(R[i]) > 0.1) return i / sr; return -1; };
       return { roll: marks.roll, after: marks.after, name: fx.state.name,
                p125: peak(1.25), p225: peak(2.25), p325: peak(3.25), on325: onset(3.25) };
     }""", carried["click120"])
@@ -258,3 +259,63 @@ def test_beat_fx_roll_slips_back_on_the_grid(proof_page, carried):
     # with slip, 2.25 s is track 3.25 (soft) and 3.25 s is track 4.25 (loud)
     assert r["p225"] < 0.8 * r["p325"], f"no slip: {r}"
     assert abs(r["on325"] - 3.25) < 0.001, f"downbeat off by {1000 * (r['on325'] - 3.25):.2f} ms"
+
+
+def test_master_never_clips_and_split_stays_aligned(proof_page):
+    """Two in-phase 0 dBFS decks at crossfader center, trims and LOW at full,
+    plus a sampler kick, every cue on: neither ear nor masterTap goes past
+    1.0. The clipper has no latency, so cue and master stay sample-aligned."""
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      async function loud(tapMaster) {
+        const ctx = new OfflineAudioContext(2, SR, SR);
+        const m = new M.Mixer(ctx);
+        if (tapMaster) m.masterTap.connect(ctx.destination); else m.output.connect(ctx.destination);
+        const o = ctx.createOscillator();
+        o.frequency.value = 100; o.start();
+        o.connect(m.channel(1).input); o.connect(m.channel(2).input);   // same phase
+        for (const n of [1, 2]) {
+          const ch = m.channel(n);
+          ch.setTrim(1); ch.setEq('low', 1); ch.setFader(1); ch.setCue(true);
+        }
+        m.setMasterCue(true);
+        m.setPhonesLevel(1);
+        const s = new S.Sampler(ctx, m.samplerInput);
+        ctx.suspend(0.5).then(() => { s.trigger(0); s.trigger(6); ctx.resume(); });
+        const out = await ctx.startRendering();
+        const pk = (a) => { let p = 0; for (let i = 0; i < a.length; i++) p = Math.max(p, Math.abs(a[i])); return p; };
+        return { left: pk(out.getChannelData(0)), right: pk(out.getChannelData(1)) };
+      }
+      // the same impulse in the cue ear and the master ear, at a level that clips
+      async function aligned(amp) {
+        const ctx = new OfflineAudioContext(2, SR, SR);
+        const m = new M.Mixer(ctx);
+        m.output.connect(ctx.destination);
+        const buf = ctx.createBuffer(1, SR, SR);
+        buf.getChannelData(0)[Math.round(0.3 * SR)] = amp;
+        const src = ctx.createBufferSource();
+        src.buffer = buf; src.connect(m.channel(1).input); src.start();
+        m.setCrossfader(0); m.channel(1).setCue(true); m.setPhonesMix(0); m.setPhonesLevel(1);
+        const out = await ctx.startRendering();
+        const am = (a) => { let k = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i]) > Math.abs(a[k])) k = i; return k; };
+        return am(out.getChannelData(0)) - am(out.getChannelData(1));
+      }
+      // the same tone level in both ears below the knee: the clipper is transparent
+      const quiet = async () => {
+        const ctx = new OfflineAudioContext(2, SR, SR);
+        const m = new M.Mixer(ctx);
+        m.output.connect(ctx.destination);
+        osc(ctx, 440, 0.5).connect(m.channel(1).input);
+        m.setCrossfader(0); m.channel(1).setCue(true); m.setPhonesMix(0); m.setPhonesLevel(1);
+        const out = await ctx.startRendering();
+        return [toneDb(out.getChannelData(0), 440, 0.3, 1), toneDb(out.getChannelData(1), 440, 0.3, 1)];
+      };
+      return { ears: await loud(false), tap: await loud(true),
+               lagQuiet: await aligned(0.5), lagLoud: await aligned(8), quiet: await quiet() };
+    }""")
+    print(f"\nheadroom: {r}")
+    assert r["ears"]["right"] < 1.0, f"master ear clips: {r}"
+    assert r["ears"]["left"] < 1.0, f"phones ear clips: {r}"
+    assert r["tap"]["left"] < 1.0 and r["tap"]["right"] < 1.0, f"masterTap reaches 1.0: {r}"
+    assert r["ears"]["right"] > 0.8, f"the loud mix should still be loud: {r}"
+    assert r["lagQuiet"] == 0 and r["lagLoud"] == 0, f"cue and master not aligned: {r}"
+    assert abs(r["quiet"][0] - r["quiet"][1]) < 0.01, f"ears differ below the knee: {r}"

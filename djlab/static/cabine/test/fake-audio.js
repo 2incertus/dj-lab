@@ -71,15 +71,35 @@ export class FakeContext {
   createChannelMerger(n = 6) { return new FakeNode(this, "merger", { numberOfInputs: n }); }
   createChannelSplitter(n = 6) { return new FakeNode(this, "splitter", { numberOfOutputs: n }); }
   createDynamicsCompressor() { return new FakeNode(this, "compressor"); }
+  createWaveShaper() { return new FakeNode(this, "waveshaper", { curve: null, oversample: "none" }); }
   createBuffer(ch, length, sr) { return new FakeBuffer(ch, length, sr); }
   of(kind) { return this.nodes.filter((n) => n.kind === kind); }
 }
 
-/** A deck stand-in for Beat FX Roll: records roll() calls. */
+/** A deck stand-in for Beat FX Roll: records roll() calls and, like Deck,
+ *  takes the hold unless it has no reliable grid. */
 export class FakeDeck {
-  constructor(playing = true) {
+  constructor(playing = true, grid = true) {
     this.state = { playing, loaded: true };
+    this.grid = grid;
     this.rolls = [];
+    this.rollHold = null;
   }
-  roll(b) { this.rolls.push(b); }
+  roll(b) {
+    this.rolls.push(b);
+    this.rollHold = b === null || !this.grid ? null : b;
+  }
+}
+
+/** A deck voice stand-in (as in deck.test.js): records state, no sound. */
+export class FakeVoice {
+  constructor() { this.loop = [null, null]; this.running = false; this.seeks = []; this._cb = null; }
+  load() { this.running = false; this.loop = [null, null]; }
+  setRate(r) { this.rate = r; }
+  seek(s, at) { this.seeks.push({ s, at }); }
+  setLoop(a, b) { this.loop = [a, b]; }
+  play() { this.running = true; }
+  pause() { this.running = false; }
+  onposition(cb) { this._cb = cb; }
+  report(s, t) { this._cb && this._cb(s, t); }
 }
