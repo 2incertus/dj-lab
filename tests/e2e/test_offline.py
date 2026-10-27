@@ -493,6 +493,8 @@ def test_recording_is_master_only(chromium, base_url, auth_cookie, play_tracks):
     none of deck 2, while the headphones do carry deck 2."""
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
     ctx = _phone(chromium, auth_cookie)
+    # the take is read back from the phone; it never needs to reach O Arquivo
+    ctx.route("**/api/mesa/export?**", lambda route: route.abort())
     try:
         page = _boot(ctx, base_url, carry=(a, b))
         r = board(page)
