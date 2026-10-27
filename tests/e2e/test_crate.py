@@ -162,7 +162,9 @@ def test_remove_frees_storage(crate_page, crate_tracks):
     carried = int(storage.get_attribute("data-carried-bytes"))
     assert carried > 50_000
     usage_before = page.evaluate("async () => (await navigator.storage.estimate()).usage")
-    r.locator(".cab-remove").click()
+    r.locator(".cab-remove").click()            # first tap only asks
+    expect(r.locator(".cab-remove")).to_have_text("tirar?")
+    r.locator(".cab-remove").click()            # second tap within 3 s confirms
     expect(r.locator(".cab-badge-phone")).to_have_count(0)
     expect(r.locator(".cab-carry")).to_be_visible()
     expect(storage).to_contain_text("0 tracks on the phone, 0 MB")
@@ -171,6 +173,29 @@ def test_remove_frees_storage(crate_page, crate_tracks):
     assert page.evaluate("async (f) => await window.cabine.store.getTrack(f)", file) is None
     usage_after = page.evaluate("async () => (await navigator.storage.estimate()).usage")
     print(f"\nstorage estimate: {usage_before} -> {usage_after} bytes (carried {carried})")
+
+
+def test_one_tap_on_tirar_does_not_remove(crate_page, crate_tracks):
+    page, file = crate_page, crate_tracks["a"]
+    r = carry(page, file)
+    r.locator(".cab-remove").click()
+    expect(r.locator(".cab-remove")).to_have_text("tirar?")
+    # no second tap: after 3 s the button goes back and the track stays
+    expect(r.locator(".cab-remove")).to_have_text("tirar", timeout=5_000)
+    expect(r.locator(".cab-badge-phone")).to_have_text("on phone")
+    assert page.evaluate("async (f) => !!(await window.cabine.store.getTrack(f))", file)
+
+
+def test_carry_error_text_is_escaped(crate_page, crate_tracks):
+    page, file = crate_page, crate_tracks["a"]
+    page.route("**/api/cabine/carry?*", lambda route: route.fulfill(
+        status=500, content_type="application/json",
+        body=json.dumps({"detail": '<img src="x" class="cab-xss">broken'})))
+    row(page, file).locator(".cab-carry").click()
+    job = page.locator("#cab-job")
+    expect(job).to_contain_text('<img src="x" class="cab-xss">broken')
+    expect(job.locator("img")).to_have_count(0)
+    page.unroute("**/api/cabine/carry?*")
 
 
 def test_carry_during_job_marks_grid_pending_then_resolves(crate_page, crate_tracks):

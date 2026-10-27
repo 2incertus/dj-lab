@@ -67,6 +67,7 @@
 .cab-btn-terra { background: var(--cab-terra); border-color: var(--cab-terra-deep); color: oklch(0.99 0.01 85); }
 .cab-btn-ink { background: var(--cab-ink); color: var(--cab-paper); }
 .cab-btn-quiet { border-color: var(--cab-rule); background: oklch(1 0 0 / 0.55); }
+.cab-remove-armed { border-color: var(--cab-terra-deep); color: var(--cab-terra-deep); font-weight: 700; }
 .cab-btn:focus-visible, .cab-input:focus-visible, .cab-tab:focus-visible, .cab-chip:focus-visible {
   outline: 2px solid var(--cab-terra); outline-offset: 2px;
 }

@@ -19,6 +19,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
 
 const TABS = [["youtube", "YouTube"], ["soundcloud", "SoundCloud"], ["spotify", "Spotify"]];
 const NUDGES = [-10, -1, 1, 10];
+const REMOVE_CONFIRM_MS = 3000;                 // "tirar?" waits this long for the second tap
 
 const SHELL = `
 <div class="cab-crate">
@@ -112,7 +113,9 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
     busy: false,               // a pull / grid job this screen started is running
     sheetFile: null,
     lastSpotify: null,
+    removeArmed: null,         // file whose "tirar" was tapped once: the next tap removes
   };
+  let removeTimer = null;
   const preview = new Preview(store);
   let alive = true;
 
@@ -204,7 +207,9 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
       actions = `<span class="cab-carrying">${esc(label)}</span>`;
     } else if (r.onPhone) {
       actions = `<button type="button" class="cab-btn cab-btn-quiet cab-grid-open"${r.grid ? "" : " disabled"}>grade</button>`
-        + `<button type="button" class="cab-btn cab-btn-quiet cab-remove" title="remove from the phone">tirar</button>`;
+        + (state.removeArmed === r.file
+          ? `<button type="button" class="cab-btn cab-btn-quiet cab-remove cab-remove-armed" title="tap again to remove from the phone">tirar?</button>`
+          : `<button type="button" class="cab-btn cab-btn-quiet cab-remove" title="remove from the phone">tirar</button>`);
     } else {
       actions = `<button type="button" class="cab-btn cab-btn-terra cab-carry" title="carry to the phone">levar</button>`;
     }
@@ -256,7 +261,7 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
       await done;
     } catch (e) {
       state.progress.delete(file);
-      flashJob(`could not carry ${file}: ${e.message}`, "fail");
+      flashJob(`could not carry ${esc(file)}: ${esc(e.message)}`, "fail");
     }
     state.progress.delete(file);
     await reloadCarried();
@@ -268,6 +273,16 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
     const file = li.dataset.file;
     if (ev.target.closest(".cab-carry")) carry(file);
     else if (ev.target.closest(".cab-remove")) {
+      // a mis-tap on a train must not drop 30 MB: the first tap asks
+      // ("tirar?"), a second one within REMOVE_CONFIRM_MS removes
+      clearTimeout(removeTimer);
+      if (state.removeArmed !== file) {
+        state.removeArmed = file;
+        removeTimer = setTimeout(() => { state.removeArmed = null; renderTracks(); }, REMOVE_CONFIRM_MS);
+        renderTracks();
+        return;
+      }
+      state.removeArmed = null;
       await sync.uncarry(file);
       if (state.sheetFile === file) closeSheet();
       await reloadCarried();
@@ -548,6 +563,7 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
     refreshRecordings: () => renderRecordings(),
     destroy() {
       alive = false;
+      clearTimeout(removeTimer);
       off();
       closeSheet();
     },
