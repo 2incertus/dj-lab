@@ -3789,7 +3789,7 @@
     }
     el.innerHTML = list.map(x => `
       <div class="arq-row">
-        <b>${escHtml(x.file.replace(/\.wav$/, ""))}</b>
+        <b>${escHtml(x.file.replace(/\.(wav|webm|m4a)$/, ""))}</b>
         <span class="side-note">${new Date(x.mtime * 1000).toLocaleDateString()}
           ${x.dur != null ? "&middot; " + fmtT(x.dur) : ""} &middot; ${(x.size / 1048576).toFixed(1)} MB</span>
         <span class="mesa-press-actions">

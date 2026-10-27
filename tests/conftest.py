@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import soundfile as sf
 
 
 def make_click_track(bpm: float, seconds: float, offset_s: float,
@@ -61,6 +60,7 @@ def wav_file(tmp_path):
     """wav_file(bpm, seconds, offset_s, sr=44100, accent_every=4, name=...) -> Path"""
     def _make(bpm: float, seconds: float, offset_s: float, sr: int = 44100,
               accent_every: int = 4, name: str = "click.wav") -> Path:
+        import soundfile as sf  # lazy: the host e2e run has no soundfile
         y = make_click_track(bpm, seconds, offset_s, sr=sr,
                              accent_every=accent_every)
         p = tmp_path / name

@@ -206,57 +206,166 @@ def escola_page():
 
 
 MESA_EXPORTS = rc.ROOT / "renders" / "sessoes"
+# what O Arquivo keeps: the mesa's wav masters and A Cabine's compressed takes
+EXPORT_TYPES = {".wav": "audio/wav", ".webm": "audio/webm", ".m4a": "audio/mp4"}
+_CLIENT_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
+
+
+def _export_kind(data: bytes):
+    """File extension for an upload by its magic bytes, or None."""
+    if data[:4] == b"RIFF":
+        return ".wav"
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return ".m4a"
+    return None
+
+
+def _probe_duration(f: Path):
+    """Seconds of a compressed export via ffprobe, or None when it can't tell.
+    A streamed webm (MediaRecorder) has no duration in its header, so fall
+    back to the last audio packet's end."""
+    import subprocess
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", str(f)],
+                           capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if r.returncode == 0 and val and val != "N/A":
+            d = float(val)
+            if math.isfinite(d) and d > 0:
+                return d
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                            "-show_entries", "packet=pts_time,duration_time",
+                            "-of", "csv=p=0", str(f)],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return None
+        end = None
+        for line in r.stdout.splitlines():
+            parts = line.strip().split(",")
+            try:
+                t = float(parts[0]) + (float(parts[1]) if len(parts) > 1 and parts[1] not in ("", "N/A") else 0.0)
+            except (ValueError, IndexError):
+                continue
+            if math.isfinite(t) and (end is None or t > end):
+                end = t
+        return end if end and end > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _export_duration(f: Path, st):
+    if f.suffix == ".wav":
+        try:
+            head = f.open("rb").read(44)
+            rate = int.from_bytes(head[24:28], "little")
+            block = int.from_bytes(head[32:34], "little") or 4
+            if rate:
+                return round(max(0, st.st_size - 44) / (rate * block), 1)
+        except OSError:
+            pass
+        return None
+    side = f.with_name(f.name + ".dur")
+    try:
+        if side.stat().st_mtime >= st.st_mtime:
+            return round(float(side.read_text().strip()), 1)
+    except (OSError, ValueError):
+        pass
+    d = _probe_duration(f)
+    if d is None:
+        return None
+    try:
+        side.write_text(f"{d:.3f}")
+    except OSError:
+        pass
+    return round(d, 1)
+
+
+def _export_by_client_id(cid: str):
+    """The export a previous upload with this exact client_id produced."""
+    for side in MESA_EXPORTS.glob(f"*-{cid[:8]}.*.cid"):
+        try:
+            if side.read_text().strip() != cid:
+                continue
+        except OSError:
+            continue
+        f = side.with_name(side.name[:-len(".cid")])
+        if f.suffix in EXPORT_TYPES and f.exists():
+            return f.name
+    return None
+
+
+def _export_file(fname: str) -> Path:
+    f = MESA_EXPORTS / Path(fname).name
+    if f.suffix not in EXPORT_TYPES or not f.is_file():
+        raise HTTPException(404, "no such export")
+    return f
 
 
 @app.get("/api/mesa/exports")
 def mesa_exports():
     MESA_EXPORTS.mkdir(parents=True, exist_ok=True)
     out = []
-    for f in sorted(MESA_EXPORTS.glob("*.wav"),
-                    key=lambda p: p.stat().st_mtime, reverse=True):
+    files = [p for p in MESA_EXPORTS.iterdir()
+             if p.suffix in EXPORT_TYPES and p.is_file()]
+    for f in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
         st = f.stat()
-        dur = None
-        try:
-            head = f.open("rb").read(44)
-            rate = int.from_bytes(head[24:28], "little")
-            block = int.from_bytes(head[32:34], "little") or 4
-            if rate:
-                dur = round(max(0, st.st_size - 44) / (rate * block), 1)
-        except OSError:
-            pass
         out.append({"file": f.name, "size": st.st_size,
-                    "mtime": int(st.st_mtime), "dur": dur})
+                    "mtime": int(st.st_mtime), "dur": _export_duration(f, st)})
     return out
 
 
 @app.post("/api/mesa/export")
-async def mesa_export_save(request: Request, name: str = "sessao"):
+async def mesa_export_save(request: Request, name: str = "sessao",
+                           client_id: str | None = None):
+    if client_id is not None and not _CLIENT_ID.fullmatch(client_id):
+        raise HTTPException(400, "bad client_id")
     data = await request.body()
     if len(data) > 200 * 1024 * 1024:
         raise HTTPException(413, "recording too large")
-    if data[:4] != b"RIFF":
-        raise HTTPException(400, "not a wav")
     MESA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    if client_id is not None:
+        # a retry of an upload that already landed: hand back the same file
+        existing = _export_by_client_id(client_id)
+        if existing:
+            return {"file": existing}
+    ext = _export_kind(data)
+    if ext is None:
+        raise HTTPException(400, "not a wav, webm or m4a")
     safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-") or "sessao"
-    fname = f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}.wav"
-    (MESA_EXPORTS / fname).write_bytes(data)
+    stem = f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}"
+    if client_id is None:
+        fname = f"{stem}{ext}"
+    else:
+        stem = f"{stem}-{client_id[:8]}"
+        fname, n = f"{stem}{ext}", 2
+        while (MESA_EXPORTS / fname).exists():   # same second, same id prefix
+            fname, n = f"{stem}-{n}{ext}", n + 1
+    dest = MESA_EXPORTS / fname
+    part = MESA_EXPORTS / f".{fname}.part"
+    part.write_bytes(data)
+    part.replace(dest)
+    for side in (".dur", ".cid"):
+        dest.with_name(fname + side).unlink(missing_ok=True)
+    if client_id is not None:
+        dest.with_name(fname + ".cid").write_text(client_id)
     return {"file": fname}
 
 
 @app.get("/api/mesa/export/{fname}")
 def mesa_export_get(fname: str):
-    f = MESA_EXPORTS / Path(fname).name
-    if not f.exists():
-        raise HTTPException(404, "no such export")
-    return FileResponse(f, media_type="audio/wav")
+    f = _export_file(fname)
+    return FileResponse(f, media_type=EXPORT_TYPES[f.suffix])
 
 
 @app.delete("/api/mesa/export/{fname}")
 def mesa_export_delete(fname: str):
-    f = MESA_EXPORTS / Path(fname).name
-    if not f.exists():
-        raise HTTPException(404, "no such export")
+    f = _export_file(fname)
     f.unlink()
+    for side in (".dur", ".cid"):
+        f.with_name(f.name + side).unlink(missing_ok=True)
     return {"deleted": fname}
 
 
