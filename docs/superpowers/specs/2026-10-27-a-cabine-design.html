@@ -94,7 +94,7 @@
   <div class="meta">
     <span class="pill">2026-10-27</span>
     <span class="pill t">status: approved 2026-10-27</span>
-    <span class="pill">target: Galaxy S7, Chrome 138</span>
+    <span class="pill">target: Mathias's iPhone (Safari)</span>
     <span class="pill">repo: 2incertus/dj-lab (public)</span>
     <span class="pill">branch: feat/a-cabine</span>
   </div>
@@ -152,8 +152,8 @@
 <table>
   <tr><th>Decision</th><th>Who</th><th>Detail</th></tr>
   <tr><td>Controller model</td><td><span class="tag his">his call</span></td><td>DDJ-FLX4 (two decks).</td></tr>
-  <tr><td>Device</td><td><span class="tag his">his call</span></td><td>His phone, in headphones, on a train. The phone is a <b>Samsung Galaxy S7</b> (Mathias thinks; to be confirmed). See the phone constraints in section 8: it sets the performance, memory and screen-size floor for everything.</td></tr>
-  <tr><td>Also works on</td><td><span class="tag mine">my call</span></td><td>A current iPhone in Safari (Mathias's), because he tests during the build and may use it himself. The S7 is the floor; the iPhone is the second target.</td></tr>
+  <tr><td>Design target</td><td><span class="tag his">his call</span></td><td>Design for <b>Mathias's iPhone</b>, current iOS, Safari, installed to the home screen. Landscape is 844 x 390 CSS px, minus the safe areas: about 47 px each side for the Dynamic Island and rounded corners, and about 21 px at the bottom for the home indicator, which leaves roughly <b>750 x 369</b> for the board and strip.</td></tr>
+  <tr><td>Also works on</td><td><span class="tag mine">my call</span></td><td>The friend's phone, a recent Samsung Galaxy (model being confirmed, probably an S10-class phone) in current Chrome. Landscape is about 760 x 360 CSS px. Second target: it must work there, but layout and feel are tuned on the iPhone.</td></tr>
   <tr><td>Layout</td><td><span class="tag his">his call</span></td><td>Option A: the whole board, phone sideways, both decks and mixer at once, waveforms across the top standing in for the laptop screen (the FLX4 itself has no screen). Rejected: portrait stacked decks (left/right becomes top/bottom), half-board with swipe (only ~25% bigger, loses the other deck mid-transition).</td></tr>
   <tr><td>Headphone cue</td><td><span class="tag his">his call</span></td><td>Split cue on one stereo output: cue in the left ear, master in the right.</td></tr>
   <tr><td>Access</td><td><span class="tag his">his call</span></td><td>Same mesa PIN gate as the rest of dj.library.icu.</td></tr>
@@ -169,7 +169,7 @@
 </table>
 <figure>
   <img src="assets/a-cabine-layout-a.png" alt="Mockup of option A: two waveforms on top, deck 1, mixer, deck 2 below, phone in landscape">
-  <figcaption>Option A as approved, drawn at iPhone landscape size (844 x 390). On the S7 the screen is 640 x 360 CSS pixels in landscape: less wide, proportionally taller, so the same layout fits with every control about a quarter smaller. This is a wireframe for positions only. Before building, the builder checks every position against a photo of a real FLX4 top panel; where this mockup and the hardware disagree, the hardware wins.</figcaption>
+  <figcaption>Option A as approved, drawn at iPhone landscape size (844 x 390), before safe areas. The real usable area is about 750 x 369, so the board is laid out inside the safe areas and comes out a little smaller than shown. This is a wireframe for positions only. Before building, the builder checks every position against a photo of a real FLX4 top panel; where this mockup and the hardware disagree, the hardware wins.</figcaption>
 </figure>
 
 <h2 id="journey"><span class="n">4</span>The ride, end to end</h2>
@@ -292,14 +292,14 @@
 
 <h2 id="constraints"><span class="n">8</span>Constraints</h2>
 <h3>The phone</h3>
-<div class="callout blue"><b>The floor: a 2016 Galaxy S7.</b>4 GB RAM, a 2016 chip, a 5.1" screen that is 640 x 360 CSS pixels in landscape. It tops out at Android 8, and Chrome 138 (mid-2025) was the last Chrome for Android 8 and 9, so the board must run on <b>Chrome 138 with no further updates</b>. That version has everything needed (AudioWorklet, service workers, screen wake lock, fullscreen with orientation lock, MediaRecorder, persistent storage), but no newer web features may be assumed. Performance is the real constraint: the board, two scrolling waveforms and two decks must stay smooth on this phone, and audio must never crackle when the UI is busy.</div>
+<div class="callout blue"><b>The target: Mathias's iPhone.</b>Safari on current iOS, installed to the home screen so it opens with no browser bars. iPhone web apps cannot go fullscreen or lock orientation from code, so the board relies on the home-screen install for chrome-free display and shows a "turn sideways" card in portrait. The safe areas (Dynamic Island side, rounded corners, home indicator) take about 94 px of width and 21 px of height in landscape; nothing interactive goes in them.</div>
 <ul>
-  <li><b>Android specifics.</b> On Android, installed web apps can go fullscreen and lock to landscape, so the board should do that when opened from the home screen. No silent switch problem, no 7-day storage clearing (persistent storage is still requested). Output latency on older Android is higher than on iPhone; same handling as Bluetooth latency below.</li>
+  <li><b>Android (second target).</b> The friend's Galaxy in current Chrome. There, installed web apps can go fullscreen and lock to landscape, so the board does that when opened from the home screen.</li>
   <li><b>Offline-first.</b> Once a track is carried, nothing on the board may touch the network. The page itself must open with no signal (installed home-screen app plus an offline cache of the page and its scripts).</li>
   <li><b>Home screen install is required, not optional.</b> On both phones it gives the full-screen board; on iPhone, Safari can clear a website's stored data after 7 days without a visit; home-screen web apps are exempt. A Cabine should say so on first run and guide the install.</li>
   <li><b>iPhone audio gotchas</b> (second target) the builder must handle and prove on Mathias's iPhone: audio only starts after a tap; the ring/silent switch can mute web audio unless the page declares itself as playback audio; the screen sleeping kills playback (keep the screen awake while a deck is playing); no programmatic orientation lock on iOS.</li>
   <li><b>Safe areas.</b> Landscape iPhones have a notch or island on one side and the home-indicator gesture zone along the bottom. Nothing interactive in those zones; the crossfader especially must sit clear of the bottom swipe area.</li>
-  <li><b>Memory.</b> Two decoded 10-minute stereo tracks as 32-bit float are about 420 MB. On a 4 GB phone from 2016 that will get the tab killed. The builder chooses a representation that keeps two long tracks plus the sampler comfortably in budget and proves it on a phone.</li>
+  <li><b>Memory.</b> Two decoded 10-minute stereo tracks as 32-bit float are about 420 MB. Phones kill tabs that hold that much, iPhones especially, and the risk grows with every track loaded. The builder chooses a representation that keeps two long tracks plus the sampler comfortably in budget and proves it on a phone.</li>
   <li><b>Scrubbing and backward play.</b> The jog's vinyl behavior needs playback at arbitrary, including negative, speeds. The standard one-shot buffer player cannot do that, so the decks need a custom player.</li>
   <li><b>Bluetooth latency.</b> AirPods-class headphones add roughly 150 to 250 ms. Both decks share it, so beatmatching by ear still works; jog and pad feel will lag. Nothing to fix; one line in the help says wired is tighter.</li>
   <li><b>Touch.</b> Multi-touch on every control at once, no page scroll, no pinch zoom, no double-tap zoom, no text selection on the board.</li>
@@ -340,12 +340,12 @@
 <h2 id="done"><span class="n">11</span>How we know it works</h2>
 <ul>
   <li><b>Positions:</b> the board compared side by side with a photo of the FLX4 top panel; every control in its place.</li>
-  <li><b>Automated, desktop and phone-size browser (640 x 360 and 844 x 390):</b> load two tracks, play both, drive every <span class="tag v1">works</span> control including multi-touch (SHIFT held + pad, two faders at once), and assert the audio actually changed (levels read from the audio graph, not CSS classes).</li>
+  <li><b>Automated, desktop and phone-size browser (844 x 390 with iPhone safe areas, and 760 x 360):</b> load two tracks, play both, drive every <span class="tag v1">works</span> control including multi-touch (SHIFT held + pad, two faders at once), and assert the audio actually changed (levels read from the audio graph, not CSS classes).</li>
   <li><b>Sync:</b> two tracks at different BPMs, SYNC on deck 2, measured phase drift stays under a few milliseconds over 2 minutes.</li>
   <li><b>Offline:</b> carry two tracks, cut the network, reload the installed page, mix and record for several minutes, restore the network, the recording lands in O Arquivo and plays from the mesa page.</li>
   <li><b>Split cue:</b> left channel carries only cue/MIX content, right channel only master, verified by rendering.</li>
   <li><b>Mesa regression:</b> the existing /mesa page, its exports, and O Arquivo behave exactly as before.</li>
-  <li><b>Real phones, early and late:</b> the audio engine is proven on a real phone before the board is built on it (a bare test page: two long tracks loaded, both playing, scrubbing, no crackle). At the end, a checklist on the S7 (Chrome 138) and on Mathias's iPhone: install to home screen, fullscreen landscape, screen stays on, two long tracks without a crash, smooth UI while both decks play, a full offline ride. Automated tests cannot prove these. If the friend's phone can't be borrowed, a cheap second-hand S7 or a Chrome 138 build on an Android 8 emulator is the fallback, and the doc should say which was used.</li>
+  <li><b>Real phones, early and late:</b> the audio engine is proven on a real phone before the board is built on it (a bare test page: two long tracks loaded, both playing, scrubbing, no crackle). At the end, a checklist on Mathias's iPhone, then on the friend's Galaxy when he can try it: install to home screen, fullscreen landscape, screen stays on, two long tracks without a crash, smooth UI while both decks play, a full offline ride. Automated tests cannot prove these. </li>
 </ul>
 
 </div>
