@@ -272,30 +272,60 @@
 
     /** The first click through the deck voice, rendered offline at the
      *  context's own rate: seconds after the grid's first beat. */
-    async function onsetMinusGrid(track, sr) {
+    /** p, or a rejection after ms ("what timed out after N s"). */
+    function withTimeout(p, ms, what) {
+      let id;
+      const t = new Promise((_, rej) => {
+        id = setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms);
+      });
+      return Promise.race([p, t]).finally(() => clearTimeout(id));
+    }
+
+    /** One measurement step: its value, or null and a reason, never a throw. */
+    async function step(r, name, fn) {
+      try {
+        return await fn();
+      } catch (e) {
+        r.errors[name] = (e && e.message) || String(e);
+        return null;
+      }
+    }
+
+    const ONSET_RENDER_S = 1;
+    const SYNC_TIMEOUT_MS = 3000;
+
+    /** The first loud sample through the deck voice, rendered offline at the
+     *  context's own rate from 0.2 s before the grid's first beat: seconds
+     *  after that beat. Only meaningful on a click fixture. */
+    async function onsetMinusGrid(track, sr, r) {
       const g = track.grid;
-      if (!g) return null;
+      if (!g) throw new Error("no grid for this track");
       const first = timeOfBeat(g, 0);
       const p0 = Math.max(0, first - 0.2);
-      const off = new OfflineAudioContext(2, Math.round(1.0 * sr), sr);
-      const voice = await DeckVoice.create(off, { testHooks: true });
+      const off = new OfflineAudioContext(2, Math.round(ONSET_RENDER_S * sr), sr);
+      const voice = await withTimeout(DeckVoice.create(off, { testHooks: true }), SYNC_TIMEOUT_MS,
+        "worklet module on the offline context");
       voice.connect(off.destination);
       const deck = new Deck(voice, { now: () => off.currentTime });
       deck.load(track);
       deck._seekNow(p0, 0);                          // dev page only
       deck.playPause();
-      await voice.sync();
-      const out = await off.startRendering();
+      try {
+        await withTimeout(voice.sync(), SYNC_TIMEOUT_MS, "offline worklet ping");
+      } catch (e) {
+        r.notes.onset = `${e.message}; rendered anyway, the onset may read late`;
+      }
+      const out = await withTimeout(off.startRendering(), 15000, "offline render");
       const L = out.getChannelData(0);
       for (let i = 0; i < L.length; i++) if (Math.abs(L[i]) > 0.1) return p0 + i / sr - first;
-      return null;
+      throw new Error(`no click above 0.1 in the ${ONSET_RENDER_S} s render`);
     }
 
     async function pingStats(voice, n = 200) {
       const d = [];
       for (let i = 0; i < n; i++) {
         const t0 = performance.now();
-        await voice.sync();
+        await withTimeout(voice.sync(), SYNC_TIMEOUT_MS, `ping ${i + 1} of ${n}`);
         d.push(performance.now() - t0);
       }
       d.sort((a, b) => a - b);
@@ -307,35 +337,48 @@
       const ctx = proof.ctx;
       const r = { file, sampleRate: ctx.sampleRate,
         baseLatencyMs: Number.isFinite(ctx.baseLatency) ? ctx.baseLatency * 1000 : null,
-        outputLatencyMs: Number.isFinite(ctx.outputLatency) ? ctx.outputLatency * 1000 : null };
+        outputLatencyMs: Number.isFinite(ctx.outputLatency) ? ctx.outputLatency * 1000 : null,
+        errors: {}, notes: {} };
       measOut.textContent = "measuring...";
-      const meta = await source.getMeta(file);
-      const track = await loadTrack(ctx, source, file);    // the deck's own decode path
-      r.samples = Number.isFinite(meta.samples) ? meta.samples : null;
-      r.decodedFrames = track.pcm.left.length;
-      r.expectedFrames = r.samples === null ? null : r.samples * ctx.sampleRate / SOURCE_RATE;
-      r.extraFrames = r.expectedFrames === null ? null : r.decodedFrames - r.expectedFrames;
-      r.headOffsetSamples44k = r.extraFrames === null ? null : r.extraFrames * SOURCE_RATE / ctx.sampleRate;
-      const on = await onsetMinusGrid(track, ctx.sampleRate);
+      const track = await step(r, "decode", async () => {
+        const meta = await withTimeout(source.getMeta(file), 15000, "library");
+        r.samples = Number.isFinite(meta.samples) ? meta.samples : null;
+        return withTimeout(loadTrack(ctx, source, file), 60000, "fetch and decode");   // the deck's own path
+      });
+      if (track) {
+        r.decodedFrames = track.pcm.left.length;
+        r.expectedFrames = r.samples === null ? null : r.samples * ctx.sampleRate / SOURCE_RATE;
+        r.extraFrames = r.expectedFrames === null ? null : r.decodedFrames - r.expectedFrames;
+        r.headOffsetSamples44k = r.extraFrames === null ? null : r.extraFrames * SOURCE_RATE / ctx.sampleRate;
+      }
+      const on = track ? await step(r, "onset", () => onsetMinusGrid(track, ctx.sampleRate, r)) : null;
+      if (!track) r.errors.onset = "no decoded track";
       r.onsetMinusGridMs = on === null ? null : on * 1000;
       r.playingDuringPings = proof.decks.some((d) => d.state.playing);
-      r.pings = await pingStats(proof.voices[0]);
-      r.recorderTypes = recorderTypes();
-      r.memory = memoryNote();
+      r.pings = await step(r, "pings", () => pingStats(proof.voices[0]));
+      r.recorderTypes = (await step(r, "recorder", async () => recorderTypes())) || {};
+      r.memory = (await step(r, "memory", async () => memoryNote())) || "n/a";
       proof.measurements = r;
       const f = (x, d = 1) => (x === null || x === undefined ? "n/a" : Number(x).toFixed(d));
+      const why = (k) => (r.errors[k] ? `n/a (${r.errors[k]})` : null);
+      const pings = r.pings;
       measOut.textContent = [
         `file ${file}`,
         `sampleRate ${r.sampleRate} Hz, baseLatency ${f(r.baseLatencyMs, 2)} ms, outputLatency ${f(r.outputLatencyMs, 2)} ms`,
-        `decoded ${r.decodedFrames} frames, expected ${f(r.expectedFrames, 1)} (samples ${r.samples ?? "n/a"} x ${r.sampleRate} / ${SOURCE_RATE})`,
-        `  decoded - expected = ${f(r.extraFrames, 1)} frames = ${f(r.headOffsetSamples44k, 1)} samples at 44.1 kHz`,
+        why("decode") ? `decoded frames: ${why("decode")}` :
+          `decoded ${r.decodedFrames} frames, expected ${f(r.expectedFrames, 1)} (samples ${r.samples ?? "n/a"} x ${r.sampleRate} / ${SOURCE_RATE})`,
+        why("decode") ? null : `  decoded - expected = ${f(r.extraFrames, 1)} frames = ${f(r.headOffsetSamples44k, 1)} samples at 44.1 kHz`,
         `  (0 = encoder delay trimmed; untrimmed LAME is about +1105 at the head plus padding)`,
-        `first onset - grid first beat = ${f(r.onsetMinusGridMs, 3)} ms (2 s render through the deck voice)`,
-        `round trip main thread -> worklet, ${r.pings.n} pings: median ${f(r.pings.medianMs, 2)} ms, max ${f(r.pings.maxMs, 2)} ms` +
+        `first onset - grid first beat = ${why("onset") || `${f(r.onsetMinusGridMs, 3)} ms`} (${ONSET_RENDER_S} s render through the deck voice)`,
+        `  (meaningful only on a click fixture: the first loud sample is taken as the first beat)`,
+        r.notes.onset ? `  note: ${r.notes.onset}` : null,
+        `round trip main thread -> worklet: ` + (why("pings") ||
+          `${pings.n} pings, median ${f(pings.medianMs, 2)} ms, max ${f(pings.maxMs, 2)} ms`) +
           (r.playingDuringPings ? " (a deck was playing)" : " (no deck playing)"),
-        `MediaRecorder: ${RECORDER_TYPES.map((t) => `${t} ${r.recorderTypes[t] ? "yes" : "no"}`).join(", ")}`,
-        `memory: ${r.memory}`,
-      ].join("\n");
+        `MediaRecorder: ` + (why("recorder") ||
+          RECORDER_TYPES.map((t) => `${t} ${r.recorderTypes[t] ? "yes" : "no"}`).join(", ")),
+        `memory: ${why("memory") || r.memory}`,
+      ].filter((x) => x !== null).join("\n");
       return r;
     }
 
