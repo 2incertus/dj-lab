@@ -75,17 +75,51 @@ def _probe(path):
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
-def test_m4a_stored_as_is(client, exports, tmp_path):
+def _moov_before_mdat(b: bytes) -> bool:
+    i, order = 0, []
+    while i + 8 <= len(b):
+        size = struct.unpack(">I", b[i:i + 4])[0]
+        order.append(b[i + 4:i + 8])
+        if size < 8:
+            break
+        i += size
+    return b"moov" in order and b"mdat" in order and order.index(b"moov") < order.index(b"mdat")
+
+
+def test_m4a_stored_remuxed_and_playable(client, exports, tmp_path):
+    """An M4A take is read and remuxed (audio copied, moov up front) before
+    it is stored: what lands in O Arquivo is a file ffprobe can time."""
     data = _encode(tmp_path, "m4a")
+    assert not _moov_before_mdat(data), "the fixture has its moov at the end"
     r = client.post("/api/mesa/export?name=cabine", content=data)
     assert r.status_code == 200, r.text
     f = r.json()["file"]
     assert re.fullmatch(r"cabine-\d{8}-\d{6}\.m4a", f)
-    assert (exports / f).read_bytes() == data
+    stored = (exports / f).read_bytes()
+    assert stored[4:8] == b"ftyp"
+    assert _moov_before_mdat(stored), "remuxed with +faststart"
+    info = _probe(exports / f)
+    assert info["codec_name"] == "aac", info
+    assert float(info["duration"]) == pytest.approx(1.5, abs=0.1)
+    assert sorted(p.name for p in exports.iterdir()) == [f], "no temp files left"
     g = client.get(f"/api/mesa/export/{f}")
     assert g.status_code == 200
     assert g.headers["content-type"] == "audio/mp4"
-    assert g.content == data
+    assert g.content == stored
+
+
+def test_truncated_m4a_is_refused(client, exports, tmp_path):
+    """A Safari MP4 part cut before stop() (a crash) has no moov: ffmpeg
+    cannot read it, so the server answers 400 and the phone keeps the take
+    as refused. Nothing is written."""
+    data = _encode(tmp_path, "m4a", 3.0)
+    cut = data[:data.rfind(b"moov") - 4]
+    assert cut[4:8] == b"ftyp" and b"moov" not in cut
+    r = client.post("/api/mesa/export?name=cabine&client_id=ffffffff-1111-4222-8333-444455556666-2",
+                    content=cut)
+    assert r.status_code == 400, r.text
+    assert "m4a" in r.json()["detail"]
+    assert not exports.exists() or not any(exports.iterdir())
 
 
 def test_webm_upload_is_stored_as_m4a(client, exports, tmp_path):
@@ -231,13 +265,30 @@ def test_parts_of_one_ride_in_the_same_second_stay_idempotent(client, exports, t
     f1 = client.post(f"/api/mesa/export?name=cabine&client_id={ride}-1", content=data).json()["file"]
     f2 = client.post(f"/api/mesa/export?name=cabine&client_id={ride}-2", content=data).json()["file"]
     assert f1 != f2
-    assert f1 == f"cabine-20261027-120000-{_cid_stem(ride + '-1')}.m4a"
-    assert f2 == f"cabine-20261027-120000-{_cid_stem(ride + '-2')}.m4a"
+    # the parts of one ride group in O Arquivo: one stem (a hash of the
+    # ride id), then -p<n>
+    assert f1 == f"cabine-20261027-120000-{_cid_stem(ride)}-p1.m4a"
+    assert f2 == f"cabine-20261027-120000-{_cid_stem(ride)}-p2.m4a"
+    assert (exports / (f1 + ".cid")).read_text() == f"{ride}-1"
+    assert (exports / (f2 + ".cid")).read_text() == f"{ride}-2"
+    # a ride id without dashes (the no-randomUUID fallback) groups the same way
+    r10 = client.post("/api/mesa/export?name=cabine&client_id=rabc123xyz-10", content=data).json()["file"]
+    assert r10 == f"cabine-20261027-120000-{_cid_stem('rabc123xyz')}-p10.m4a"
     before = sorted(p.name for p in exports.iterdir())
-    for cid, f in ((f"{ride}-2", f2), (f"{ride}-1", f1)):
+    for cid, f in ((f"{ride}-2", f2), (f"{ride}-1", f1), ("rabc123xyz-10", r10)):
         r = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
         assert r.json() == {"file": f}, cid
     assert sorted(p.name for p in exports.iterdir()) == before
+    # another ride's part 1 is a different recording with its own stem
+    other_ride = "7c1d2e3f-aaaa-4bbb-8ccc-eeeeeeeeeeee"
+    fo = client.post(f"/api/mesa/export?name=cabine&client_id={other_ride}-1", content=data).json()["file"]
+    assert fo == f"cabine-20261027-120000-{_cid_stem(other_ride)}-p1.m4a"
+    # a part 1 stored before the -p names (stem of the whole id) is still found
+    old_part = f"{ride}-3"
+    legacy_part = f"cabine-20261026-120000-{_cid_stem(old_part)}.m4a"
+    (exports / legacy_part).write_bytes(data)
+    (exports / (legacy_part + ".cid")).write_text(old_part)
+    assert client.post(f"/api/mesa/export?name=cabine&client_id={old_part}", content=data).json() == {"file": legacy_part}
     # a suffixed name (two different ids whose hashes share 8 chars in one
     # second) is still found by its retry
     other = "11111111-2222-4333-8444-555555555555"
@@ -253,11 +304,13 @@ def test_parts_of_one_ride_in_the_same_second_stay_idempotent(client, exports, t
     assert client.post(f"/api/mesa/export?name=cabine&client_id={legacy_id}", content=data).json() == {"file": legacy}
 
 
-def test_webm_transcode_timeout_is_503_not_400(client, exports, tmp_path, monkeypatch):
-    """A transcode that runs out of time is the server's trouble: 503, so the
-    phone keeps the take queued and retries (a 400 would mark it rejected)."""
+@pytest.mark.parametrize("ext", ["webm", "m4a"])
+def test_transcode_timeout_is_503_not_400(client, exports, tmp_path, monkeypatch, ext):
+    """A transcode (webm) or remux (m4a) that runs out of time is the
+    server's trouble: 503, so the phone keeps the take queued and retries
+    (a 400 would mark it rejected)."""
     import subprocess as sp
-    data = _encode(tmp_path, "webm")
+    data = _encode(tmp_path, ext)
     real = sp.run
 
     def slow(cmd, *a, **k):

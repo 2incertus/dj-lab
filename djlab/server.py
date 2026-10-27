@@ -289,20 +289,23 @@ def _export_duration(f: Path, st):
 
 
 WEBM_TO_M4A = ["-vn", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+# an M4A take (Safari) is read and rewritten, audio untouched: a part cut by
+# a crash before its moov fails here instead of landing unplayable
+M4A_REMUX = ["-vn", "-c:a", "copy", "-movflags", "+faststart"]
 
 
 WEBM_TIMEOUT_S = 900
 
 
-def _webm_to_m4a(src: Path, dest: Path) -> str:
+def _webm_to_m4a(src: Path, dest: Path, args=WEBM_TO_M4A) -> str:
     """Transcode a WebM/Opus take to AAC 160k in M4A (the iPhone plays it
-    from O Arquivo; Safari's WebM support is uneven). "ok", "unreadable"
-    (ffmpeg can't read it: the phone stops retrying) or "timeout" (the
-    server's trouble: the phone retries)."""
+    from O Arquivo; Safari's WebM support is uneven), or with args=M4A_REMUX
+    remux an M4A take. "ok", "unreadable" (ffmpeg can't read it: the phone
+    stops retrying) or "timeout" (the server's trouble: the phone retries)."""
     import subprocess
     try:
         r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(src),
-                            *WEBM_TO_M4A, "-f", "mp4", str(dest)],
+                            *args, "-f", "mp4", str(dest)],
                            capture_output=True, timeout=WEBM_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         return "timeout"
@@ -312,9 +315,24 @@ def _webm_to_m4a(src: Path, dest: Path) -> str:
 
 
 def _cid_stem(cid: str) -> str:
-    """8 hex chars from the whole client id: the parts of one ride
+    """8 hex chars from a client id (or a ride id): the parts of one ride
     (<ride>-1, <ride>-2) share their first 8 characters, never this."""
     return hashlib.sha256(cid.encode()).hexdigest()[:8]
+
+
+# an iPhone part: "<ride>-<n>". A ride id is a UUID (its last group is 12
+# hex chars) or the fallback "r<base36>" with no dash, so a 1 to 4 digit
+# tail can only be a part number.
+_PART_ID = re.compile(r"(.+)-([0-9]{1,4})")
+
+
+def _cid_name_stem(cid: str) -> str:
+    """The client-id part of an export's name: <stem(ride)>-p<n> for a part,
+    so the parts of one ride group in O Arquivo; <stem(cid)> otherwise."""
+    m = _PART_ID.fullmatch(cid)
+    if m:
+        return f"{_cid_stem(m.group(1))}-p{int(m.group(2))}"
+    return _cid_stem(cid)
 
 
 _upload_locks: dict = {}
@@ -322,9 +340,12 @@ _upload_locks: dict = {}
 
 def _export_by_client_id(cid: str):
     """The export a previous upload with this exact client_id produced.
-    Names carry _cid_stem(cid), maybe with a "-<n>" suffix; exports made
-    before the hash stems carry cid[:8]. The full id is always compared."""
-    sides = {*MESA_EXPORTS.glob(f"*-{_cid_stem(cid)}*.cid"), *MESA_EXPORTS.glob(f"*-{cid[:8]}*.cid")}
+    Names carry _cid_name_stem(cid), maybe with a "-<n>" suffix; parts
+    stored before the -p names carry _cid_stem(cid), exports made before
+    the hash stems carry cid[:8]. The full id is always compared."""
+    sides = {*MESA_EXPORTS.glob(f"*-{_cid_name_stem(cid)}*.cid"),
+             *MESA_EXPORTS.glob(f"*-{_cid_stem(cid)}*.cid"),
+             *MESA_EXPORTS.glob(f"*-{cid[:8]}*.cid")}
     for side in sorted(sides):
         try:
             if side.read_text().strip() != cid:
@@ -394,22 +415,24 @@ def _save_export(data: bytes, name: str, client_id):
     if client_id is None:
         fname = f"{stem}{stored}"
     else:
-        stem = f"{stem}-{_cid_stem(client_id)}"
+        stem = f"{stem}-{_cid_name_stem(client_id)}"
         fname, n = f"{stem}{stored}", 2
         while (MESA_EXPORTS / fname).exists():   # same second, same id prefix
             fname, n = f"{stem}-{n}{stored}", n + 1
     dest = MESA_EXPORTS / fname
     part = MESA_EXPORTS / f".{fname}.part"
-    if ext == ".webm":
-        raw = MESA_EXPORTS / f".{fname}.webm.part"
+    if ext in (".webm", ".m4a"):
+        # webm is transcoded to AAC, m4a remuxed (audio copied): either way
+        # ffmpeg reads the whole take, and one it cannot read is refused
+        raw = MESA_EXPORTS / f".{fname}{ext}.part"
         try:
             raw.write_bytes(data)
-            how = _webm_to_m4a(raw, part)
+            how = _webm_to_m4a(raw, part, WEBM_TO_M4A if ext == ".webm" else M4A_REMUX)
             if how != "ok":
                 part.unlink(missing_ok=True)
                 if how == "timeout":
                     raise HTTPException(503, "the server is busy, try again later")
-                raise HTTPException(400, "that webm could not be read")
+                raise HTTPException(400, f"that {ext[1:]} could not be read")
         finally:
             raw.unlink(missing_ok=True)
     else:
