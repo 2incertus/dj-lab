@@ -417,17 +417,27 @@ def intake_youtube_search(q: str):
     return {"videos": intake.youtube_search(q)}
 
 
+@app.get("/api/intake/soundcloud/search")
+def intake_soundcloud_search(q: str):
+    from . import intake
+    try:
+        return {"tracks": intake.soundcloud_search(q)}
+    except Exception as e:
+        raise HTTPException(502, f"soundcloud search failed: {e}")
+
+
 @app.post("/api/intake/pull")
 def intake_pull(data: dict):
     from . import intake
     url = data.get("url", "")
     folder = data.get("folder", "")
-    if not url.startswith("https://www.youtube.com/watch?v="):
+    source = intake.source_of(url) if isinstance(url, str) else None
+    if source is None:
         raise HTTPException(400, "bad url")
     if folder not in intake.FOLDERS:
         raise HTTPException(400, "bad folder")
     return {"job": _run_job(
-        "pull from youtube",
+        f"pull from {source}",
         lambda: intake.pull(url, folder, data.get("name")))}
 
 
