@@ -93,7 +93,7 @@
   <p class="lede">A virtual DDJ-FLX4 on a phone, inside the mesa, so a friend who owns the real controller can keep getting reps on his commute home and have his hands still be right when he sits back down at the hardware.</p>
   <div class="meta">
     <span class="pill">2026-10-27</span>
-    <span class="pill t">status: approved 2026-10-27</span>
+    <span class="pill t">status: approved 2026-10-27, amended after the mid-build review</span>
     <span class="pill">target: Mathias's iPhone (Safari)</span>
     <span class="pill">repo: 2incertus/dj-lab (public)</span>
     <span class="pill">branch: feat/a-cabine</span>
@@ -219,18 +219,18 @@
 <h3>Deck (x2, mirrored as on the hardware)</h3>
 <table>
   <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
-  <tr><td>PLAY/PAUSE</td><td><span class="tag v1">works</span></td><td>Toggle. SHIFT + PLAY: stutter back to the cue point (rekordbox default).</td></tr>
+  <tr><td>PLAY/PAUSE</td><td><span class="tag v1">works</span></td><td>Toggle. SHIFT + PLAY does nothing with rekordbox (the manual lists stutter for Serato only); to be confirmed with one press on the real FLX4.</td></tr>
   <tr><td>CUE</td><td><span class="tag v1">works</span></td><td>Paused: sets the cue point at the playhead. Held while paused: plays from cue, returns on release. Pressed while playing: back to cue and pause. SHIFT + CUE: back to the start of the track.</td></tr>
   <tr><td>Jog, top plate</td><td><span class="tag v1">works</span></td><td>Touching the top plate grabs the record: drag rotates it, scrubbing forward and backward (vinyl mode), audio follows the finger. Lift releases back to playing speed. Paused: scrub to find a spot. SHIFT + top: fast search.</td></tr>
-  <tr><td>Jog, outer ring</td><td><span class="tag v1">works</span></td><td>Drag along the ring nudges speed up or down while dragging (pitch bend). Touch translation: the ring is the outer band of the drawn wheel; the inner disc is the top plate.</td></tr>
-  <tr><td>TEMPO slider</td><td><span class="tag v1">works</span></td><td>Vertical drag. Down = faster, as on Pioneer gear. Ranges ±6%, ±10%, ±16%, WIDE, cycled with SHIFT + BEAT SYNC. Shows a center mark. Fine control matters more than travel: the drag must allow 0.02% steps at ±6%.</td></tr>
-  <tr><td>BEAT SYNC</td><td><span class="tag v1">works</span></td><td>Matches this deck's tempo and beat phase to the other deck and stays synced while on (lit). Off by default on every load.</td></tr>
+  <tr><td>Jog, outer ring</td><td><span class="tag v1">works</span></td><td>Drag along the ring nudges speed up or down while dragging (pitch bend), from a smoothed ring velocity so a slow steady drag does not warble. Touch translation: the ring is the outer band of the drawn wheel; the inner disc is the top plate. Mapping is <b>angle-faithful</b> (one drawn turn = 1.8 s of audio, as one platter turn), with the ring's bend gain reduced so a thumb arc on a 35 mm wheel bends about like a finger arc on the 118 mm hardware; both constants are named.</td></tr>
+  <tr><td>TEMPO slider</td><td><span class="tag v1">works</span></td><td>Vertical drag. Down = faster, as on Pioneer gear. Ranges ±6%, ±10%, ±16%, WIDE, cycled with SHIFT + BEAT SYNC; the default range is read off the friend's rekordbox (the manual does not state it; ±10 until then). Shows a center mark. Fine control matters more than travel: the drag must allow 0.02% steps at ±6%.</td></tr>
+  <tr><td>BEAT SYNC</td><td><span class="tag v1">works</span></td><td>Matches this deck's tempo and beat phase to the other deck and stays synced while on (lit). Off by default on every load. Pressing SYNC on the deck that is already the master lights its button and <b>keeps the roles</b> (the follower stays synced, the master's slider still drives both); it never flips who follows whom. After SYNC goes off the deck holds its tempo until the slider crosses it (takeover), so there is no jump on the first touch.</td></tr>
   <tr><td>IN / OUT</td><td><span class="tag v1">works</span></td><td>Manual loop start and end (quantized to the grid when quantize is on, the rekordbox default).</td></tr>
-  <tr><td>4 BEAT/EXIT</td><td><span class="tag v1">works</span></td><td>No loop: starts a 4-beat loop. Loop active: exits. SHIFT: reloop.</td></tr>
+  <tr><td>4 BEAT/EXIT</td><td><span class="tag v1">works</span></td><td>No loop: starts a 4-beat loop on the <b>nearest</b> beat (rekordbox quantize snaps to the nearest beat, so a press 40 ms early still starts on the beat he meant). Loop active: exits. SHIFT: Active Loop (the manual), not reloop.</td></tr>
   <tr><td>CUE/LOOP CALL ◀ ▶</td><td><span class="tag v1">works</span></td><td>Loop active: halve / double. No loop: <span class="tag drawn">drawn only</span> (memory cue call needs rekordbox memory cues, out of scope).</td></tr>
   <tr><td>Pad mode: HOT CUE</td><td><span class="tag v1">works</span></td><td>8 hot cues A to H. Unlit pad sets, lit pad jumps (and plays if playing). SHIFT + pad clears. Colors as rekordbox's defaults.</td></tr>
   <tr><td>Pad mode: BEAT JUMP</td><td><span class="tag v1">works</span></td><td>Jumps back/forward by 1, 2, 4, 8 beats... in rekordbox's pad order. Keeps phase.</td></tr>
-  <tr><td>SHIFT + BEAT JUMP: BEAT LOOP</td><td><span class="tag v1">works</span></td><td>Pads set loops of 1/4, 1/2, 1, 2, 4, 8, 16, 32 beats.</td></tr>
+  <tr><td>SHIFT + BEAT JUMP: BEAT LOOP</td><td><span class="tag v1">works</span></td><td>Pads set loops of 1/4, 1/2, 1, 2, 4, 8, 16, 32 beats, on the nearest beat; the same pad again cancels (the manual).</td></tr>
   <tr><td>Pad mode: SAMPLER</td><td><span class="tag v1">works</span></td><td>8 one-shots. rekordbox's factory bank is not ours to ship, so the pads load the mesa's own drum one-shots and synth stabs <span class="tag mine">my call</span>. Through the master, not a channel.</td></tr>
   <tr><td>PAD FX1/2, KEYBOARD, KEY SHIFT</td><td><span class="tag drawn">drawn only</span></td><td>Shows "not yet".</td></tr>
   <tr><td>SHIFT</td><td><span class="tag v1">works</span></td><td>Held, like the hardware. Per deck, as on the FLX4.</td></tr>
@@ -241,13 +241,14 @@
   <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
   <tr><td>Knobs (all)</td><td>n/a</td><td>Touch translation: vertical drag, double-tap returns to the default (center for EQ/CFX, unity for TRIM). Center detent feel on EQ and CFX.</td></tr>
   <tr><td>TRIM</td><td><span class="tag v1">works</span></td><td>Pre-fader gain, same range as the hardware.</td></tr>
-  <tr><td>HI / MID / LOW</td><td><span class="tag v1">works</span></td><td>3-band EQ, full cut at minimum (kill), small boost at maximum, rekordbox's EQ ranges.</td></tr>
+  <tr><td>HI / MID / LOW</td><td><span class="tag v1">works</span></td><td>3-band EQ in rekordbox's <b>EQ</b> mode by default (-26 dB at minimum, +6 dB at maximum, DJM-style), with ISOLATOR (full kill) as a one-constant switch; which one he runs at home is read off a screenshot of the friend's rekordbox Mixer preferences, along with the fader and crossfader curves.</td></tr>
   <tr><td>CFX</td><td><span class="tag v1">works</span></td><td>Color FX "Filter" (rekordbox default): left of center low-pass, right high-pass, resonant, off at center.</td></tr>
   <tr><td>CUE (per channel)</td><td><span class="tag v1">works</span></td><td>Sends that channel to the headphone (left-ear) side. Both can be on.</td></tr>
-  <tr><td>Channel level meters</td><td><span class="tag v1">works</span></td><td>Post-fader levels, as on the hardware.</td></tr>
+  <tr><td>Channel level meters</td><td><span class="tag v1">works</span></td><td>Pre-fader levels, as the FLX4 manual states ("before it passes through the channel faders"), with peak hold.</td></tr>
   <tr><td>Channel faders</td><td><span class="tag v1">works</span></td><td>Vertical drag.</td></tr>
   <tr><td>Crossfader</td><td><span class="tag v1">works</span></td><td>Horizontal drag. rekordbox's default curve.</td></tr>
   <tr><td>MASTER LEVEL</td><td><span class="tag v1">works</span></td><td>Master out (the right ear) level.</td></tr>
+  <tr><td>Headroom and limiter</td><td><span class="tag mine">my call</span></td><td>Every deck enters the mixer at -6 dB (rekordbox's "Output Level" preference, -21 to -3 dB) and both ears pass a zero-latency soft clipper, as rekordbox's internal mixer limits on clipping. Two overlapping tracks never clip the headphones or the recording.</td></tr>
   <tr><td>MASTER CUE</td><td><span class="tag v1">works</span></td><td>Adds master to the headphone side.</td></tr>
   <tr><td>HEADPHONES MIX / LEVEL</td><td><span class="tag v1">works</span></td><td>MIX blends cue and master on the left ear. LEVEL sets the left-ear level. The phone's hardware volume buttons still control everything.</td></tr>
   <tr><td>BROWSE + LOAD 1 / LOAD 2</td><td><span class="tag v1">works</span></td><td>Touch translation: pressing BROWSE drops a track list over the waveform strip (the "laptop screen"). Turning BROWSE (drag) moves the highlight; the list also scrolls with a finger. LOAD 1 / LOAD 2 load the highlighted track; loading onto a playing deck follows rekordbox's default load-lock setting (the builder checks which it is). Pressing BROWSE again, or loading, closes the list.</td></tr>
@@ -259,13 +260,13 @@
   <tr><th>Control</th><th>v1</th><th>Behavior</th></tr>
   <tr><td>FX SELECT</td><td><span class="tag v1">works</span></td><td>Cycles a v1 subset of rekordbox's Beat FX: Delay, Echo, Reverb, Flanger, Roll <span class="tag mine">my call</span>. Current effect name shown on the waveform strip.</td></tr>
   <tr><td>BEAT ◀ ▶</td><td><span class="tag v1">works</span></td><td>Beat fraction (1/4 to 4 beats), synced to the master deck's BPM.</td></tr>
-  <tr><td>CH SELECT</td><td><span class="tag v1">works</span></td><td>1 / 2 / MASTER, as the hardware lever. Touch translation: tap cycles.</td></tr>
+  <tr><td>CH SELECT</td><td><span class="tag v1">works</span></td><td>1 / 2 / <b>1&amp;2</b>, as the hardware lever (the manual; the third position is both channels, not the master bus). Touch translation: tap cycles.</td></tr>
   <tr><td>LEVEL/DEPTH</td><td><span class="tag v1">works</span></td><td>Wet/dry.</td></tr>
   <tr><td>ON/OFF</td><td><span class="tag v1">works</span></td><td>Toggles the effect, lit while on. Echo/delay tails ring out after off.</td></tr>
 </table>
 
 <h3>Waveform strip (the "laptop screen")</h3>
-<p>Two horizontal scrolling waveforms, deck 1 on top, playhead at center, beat grid ticks, hot cue markers, loop region. Per deck: artist and title, current BPM (with tempo applied), key, time remaining, SYNC state. A thin full-track overview per deck shows position. It is read-only <span class="tag mine">my call</span>, following the anti-goals: tapping the waveform does nothing, because at home it is a laptop screen across the desk.</p>
+<p>Two horizontal scrolling waveforms, deck 1 on top, playhead at center, beat grid ticks, hot cue markers, loop region. Per deck: artist and title, current BPM (with tempo applied), key, time remaining, SYNC state. A thin full-track overview per deck shows position. The playhead and beat ticks are drawn <b>latency-compensated</b> (the audio context's output latency, 150 to 250 ms on Bluetooth), so what he sees lines up with what he hears. The key shown is the analyzed key, never tempo-shifted. It is read-only <span class="tag mine">my call</span>, following the anti-goals: tapping the waveform does nothing, because at home it is a laptop screen across the desk.</p>
 
 <h2 id="tracks"><span class="n">6</span>Tracks: crate, grid, carry</h2>
 <h3>Getting techno in</h3>
@@ -285,7 +286,7 @@
 <ul>
   <li>A REC control sits on the waveform strip (the hardware has none, so it goes on the "screen", not the board).</li>
   <li>Records the master bus only. Never the cue side, never the split headphone signal.</li>
-  <li>Recordings are compressed (a ride can be 40+ minutes; the mesa's current WAV recorder caps at 10 minutes and a 40-minute WAV is ~400 MB).</li>
+  <li>Recordings are compressed (a ride can be 40+ minutes; the mesa's current WAV recorder caps at 10 minutes and a 40-minute WAV is ~400 MB). On the Galaxy that is WebM/Opus in 5-second chunks (a crash loses at most 5 s). On the iPhone Safari records AAC in MP4, which is only valid once stopped; whether a crash loses the whole file is measured on the phone, and if it does, iPhone rides are recorded in 5-minute parts so a crash loses at most the current part. WebM uploads are transcoded to M4A on the server so they play from O Arquivo on the iPhone.</li>
   <li>Stored on the phone first. Uploaded to O Arquivo automatically when online, retried until the server confirms. Listed as "waiting to upload" until then.</li>
   <li>The server side today accepts WAV only (<code>POST /api/mesa/export</code>, 200 MB cap, <code>RIFF</code> check) and O Arquivo lists <code>*.wav</code> only. Both need to accept and list the compressed format, with durations, without breaking existing WAV exports.</li>
 </ul>
@@ -298,15 +299,16 @@
   <li><b>Offline-first.</b> Once a track is carried, nothing on the board may touch the network. The page itself must open with no signal (installed home-screen app plus an offline cache of the page and its scripts).</li>
   <li><b>Home screen install is required, not optional.</b> On both phones it gives the full-screen board; on iPhone, Safari can clear a website's stored data after 7 days without a visit; home-screen web apps are exempt. A Cabine should say so on first run and guide the install.</li>
   <li><b>iPhone audio gotchas</b> (second target) the builder must handle and prove on Mathias's iPhone: audio only starts after a tap; the ring/silent switch can mute web audio unless the page declares itself as playback audio; the screen sleeping kills playback (keep the screen awake while a deck is playing); no programmatic orientation lock on iOS.</li>
+  <li><b>Interruptions.</b> A phone call, Siri, another app taking audio, or AirPods coming off suspends Safari's audio. The app shows a "tap to resume" veil and both decks resume exactly where they were; nothing in the engine needs to change for this, only the surface.</li>
   <li><b>Safe areas.</b> Landscape iPhones have a notch or island on one side and the home-indicator gesture zone along the bottom. Nothing interactive in those zones; the crossfader especially must sit clear of the bottom swipe area.</li>
-  <li><b>Memory.</b> Two decoded 10-minute stereo tracks as 32-bit float are about 420 MB. Phones kill tabs that hold that much, iPhones especially, and the risk grows with every track loaded. The builder chooses a representation that keeps two long tracks plus the sampler comfortably in budget and proves it on a phone.</li>
+  <li><b>Memory.</b> Two decoded 10-minute stereo tracks as 32-bit float are about 420 MB. Phones kill tabs that hold that much, iPhones especially. The decks hold 16-bit PCM (half), decode at the file's own 44.1 kHz through an offline context (no upsampling), and unload the old track before decoding a new one. The decode itself still peaks at float + int16 + MP3 for one track; that peak is measured on the iPhone. If it fails there, the fallback is <b>segmented carry</b>: the server cuts the track into fixed-length gapless MP3 segments and the phone decodes one at a time into a preallocated buffer.</li>
   <li><b>Scrubbing and backward play.</b> The jog's vinyl behavior needs playback at arbitrary, including negative, speeds. The standard one-shot buffer player cannot do that, so the decks need a custom player.</li>
   <li><b>Bluetooth latency.</b> AirPods-class headphones add roughly 150 to 250 ms. Both decks share it, so beatmatching by ear still works; jog and pad feel will lag. Nothing to fix; one line in the help says wired is tighter.</li>
   <li><b>Touch.</b> Multi-touch on every control at once, no page scroll, no pinch zoom, no double-tap zoom, no text selection on the board.</li>
 </ul>
 <h3>The server and repo</h3>
 <ul>
-  <li><b>PIN gate.</b> All <code>/api/</code> and <code>/audio/</code> paths are gated by the <code>dj_auth</code> cookie (30-day max age). <code>/static/</code> is public, so nothing private goes there. If the cookie lapses while offline, the board must keep working with carried tracks and ask for the PIN only when it next needs the server.</li>
+  <li><b>PIN gate.</b> All <code>/api/</code> and <code>/audio/</code> paths are gated by the <code>dj_auth</code> cookie (30-day max age). <code>/static/</code> is public, so nothing private goes there. <b>The A Cabine shell itself is public</b> (it holds no data; everything private comes through <code>/api/</code>), and the PIN card lives inside the app: it appears when a server call answers 401. That is what makes a fresh home-screen install (its own cookie jar), a lapsed cookie, and the offline case behave the same: the board and carried tracks keep working, only server actions ask for the PIN.</li>
   <li><b>Service worker scope.</b> Static files live under <code>/static/</code>; a worker served from there would only control <code>/static/</code>. The worker must be served at a path whose scope covers <code>/cabine</code>.</li>
   <li><b>Public repo.</b> No PIN, hashes, tokens, or the friend's name in code, docs, or commits.</li>
   <li><b>Do not disturb the mesa.</b> Shared endpoints keep their current behavior for the existing page. CSS class names are checked for collisions (the mesa has been bitten by <code>.mixer</code> before). A Cabine's code is its own files, not more lines in <code>escola.js</code> (4,445 lines).</li>
@@ -345,6 +347,7 @@
   <li><b>Offline:</b> carry two tracks, cut the network, reload the installed page, mix and record for several minutes, restore the network, the recording lands in O Arquivo and plays from the mesa page.</li>
   <li><b>Split cue:</b> left channel carries only cue/MIX content, right channel only master, verified by rendering.</li>
   <li><b>Mesa regression:</b> the existing /mesa page, its exports, and O Arquivo behave exactly as before.</li>
+  <li><b>Numbers only a phone can give</b>, read off the proof page on the iPhone before the board is built on it: output latency, decoded-length delta (does Safari trim the MP3 encoder delay), first-onset-minus-grid in ms, worklet message latency, which recorder formats exist and whether a stop-less recording plays. They set the scheduling lead, the latency compensation and the recorder design.</li>
   <li><b>Real phones, early and late:</b> the audio engine is proven on a real phone before the board is built on it (a bare test page: two long tracks loaded, both playing, scrubbing, no crackle). At the end, a checklist on Mathias's iPhone, then on the friend's Galaxy when he can try it: install to home screen, fullscreen landscape, screen stays on, two long tracks without a crash, smooth UI while both decks play, a full offline ride. Automated tests cannot prove these. </li>
 </ul>
 
