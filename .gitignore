@@ -25,3 +25,6 @@ __pycache__/
 
 # secrets
 *.env
+
+# A Cabine carried tracks
+carry/

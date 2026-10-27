@@ -10,3 +10,5 @@ uvicorn
 python-multipart
 yt-dlp
 httpx
+pytest
+beat_this @ https://github.com/CPJKU/beat_this/archive/refs/heads/main.zip
