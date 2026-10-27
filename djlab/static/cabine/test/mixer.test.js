@@ -282,31 +282,34 @@ test("roll_rolls_the_target_deck_and_master_holds_both_decks", () => {
   fx.setOn(false);
 });
 
-test("roll_releases_only_decks_that_took_the_hold", () => {
-  const decks = [new FakeDeck(true, false), new FakeDeck(true)];   // deck 1 has no grid
+test("roll_off_reaches_every_target_deck", () => {
+  const decks = [new FakeDeck(true, false), new FakeDeck(false)];   // no grid, paused
   const { fx } = fxRig({ decks });
   for (let i = 0; i < 4; i++) fx.select(1);
   fx.setTarget("master");
   fx.setOn(true);
-  assert.deepEqual(fx._rolling, [decks[1]]);
   fx.setOn(false);
-  assert.deepEqual(decks[0].rolls, [1], "no release sent to a deck that never rolled");
+  assert.deepEqual(decks[0].rolls, [1, null], "off is sent whatever the deck did with on");
   assert.deepEqual(decks[1].rolls, [1, null]);
 });
 
 // Beat FX Roll against real decks (fake voice): the pause paths.
-function rollRig() {
+const rollTrack = (reliable = true) => ({
+  pcm: { left: new Int16Array(0), right: new Int16Array(0), sampleRate: 44100 },
+  grid: { bpm: 120, first_beat_s: 0, downbeat_s: 0, beat_cv: 0.02, reliable },
+  meta: { duration_s: 300, bpm: 120 }, hotCues: null,
+});
+
+function rollRig({ loadA = true } = {}) {
   const c = { t: 0 };
   const now = () => c.t;
-  const mk = () => {
+  const mk = (load) => {
     const v = new FakeVoice();
     const d = new Deck(v, { now, setTimeout: () => null, clearTimeout: () => {} });
-    d.load({ pcm: { left: new Int16Array(0), right: new Int16Array(0), sampleRate: 44100 },
-      grid: { bpm: 120, first_beat_s: 0, downbeat_s: 0, beat_cv: 0.02, reliable: true },
-      meta: { duration_s: 300, bpm: 120 }, hotCues: null });
+    if (load) d.load(rollTrack());
     return { v, d };
   };
-  const A = mk(), B = mk();
+  const A = mk(loadA), B = mk(true);
   const ctx = new FakeContext();
   const fx = new BeatFx(ctx, new Mixer(ctx), () => 120, { decks: [A.d, B.d] });
   for (let i = 0; i < 4; i++) fx.select(1);       // Roll, 1 beat, CH 1
@@ -398,4 +401,42 @@ test("sampler_has_eight_pads_in_order_and_retriggers", () => {
   assert.equal(again.out.gain.value, 0);
   assert.equal(s.trigger(8), null);
   for (const name of SAMPLER_ACTIONS) assert.equal(typeof Sampler.prototype[name], "function", name);
+});
+
+test("roll_off_after_a_no_grid_load_leaves_no_roll_behind", () => {
+  const { c, A, fx } = rollRig();
+  A.d.playPause();
+  A.v.report(10.1, 0);
+  fx.setOn(true);                                 // rolling, 1 beat
+  assert.notEqual(A.d.state.roll, null);
+  A.d.load(rollTrack(false));                     // a track with no reliable grid
+  fx.beat(1);                                     // 2 beats: the deck cannot take it
+  fx.setOn(false);
+  A.d.load(rollTrack(true));                      // a gridded track, Beat FX off
+  c.t = 1;
+  A.d.playPause();
+  assert.equal(A.d.state.roll, null, "Beat FX is off: nothing may roll");
+  assert.deepEqual(A.v.loop, [null, null]);
+});
+
+test("a_deck_loaded_while_roll_is_on_rolls_when_it_plays", () => {
+  const { c, A, fx } = rollRig({ loadA: false });    // deck 1 empty when Roll goes on
+  fx.setOn(true);
+  A.d.load(rollTrack(true));
+  A.v.report(10.1, 0);
+  c.t = 0.5;
+  A.d.playPause();
+  assert.deepEqual(A.d.state.roll, { beats: 1, in: 10.0, out: 10.5 }, "empty -> gridded, played");
+  A.d.playPause();
+  A.d.load(rollTrack(false));                     // no grid: plays without a roll
+  A.d.playPause();
+  assert.equal(A.d.state.roll, null);
+  A.d.playPause();
+  A.d.load(rollTrack(true));                      // gridded again, Roll still on
+  A.v.report(20.3, 2);
+  c.t = 2;
+  A.d.playPause();
+  assert.deepEqual(A.d.state.roll, { beats: 1, in: 20.0, out: 20.5 }, "no-grid -> gridded, played");
+  fx.setOn(false);
+  assert.equal(A.d.state.roll, null);
 });

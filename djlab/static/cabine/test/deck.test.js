@@ -553,37 +553,51 @@ test("roll_with_no_reliable_grid_is_a_noop", () => {
   assert.equal(v.calls.length, n);
 });
 
-test("roll_on_a_paused_deck_waits_for_play", () => {
-  const { c, v, d } = setup(grid(120));
+test("roll_on_a_paused_deck_is_a_noop", () => {
+  const { v, d } = setup(grid(120));
   v.report(10.1, 0);
   d.roll(1);
   assert.equal(d.state.roll, null);
   assert.deepEqual(v.loop, [null, null]);
-  assert.equal(d.rollHold, 1);
-  c.t = 1;
   d.playPause();
-  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
-  d.roll(null);
-  assert.equal(d.rollHold, null);
+  assert.equal(d.state.roll, null, "the deck keeps no memory of an earlier roll()");
 });
 
-test("hot_cue_start_and_cue_preview_roll_while_held", () => {
+test("onstart_fires_on_every_play_start_and_pauses_end_the_roll", () => {
   const { c, v, d } = setup(grid(120));
+  const starts = [];
+  d.onstart((deck) => { starts.push(deck.state.playing); deck.roll(1); });   // a Beat FX stand-in
   v.report(10.1, 0);
-  d.roll(1);
-  d.hotCue(0);                                  // sets A at 10.0 (paused: no start)
-  assert.equal(d.state.roll, null);
-  d.hotCue(0);                                  // lit pad: playback starts from A
+  d.playPause();                                // PLAY
+  assert.deepEqual(starts, [true]);
   assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
-  c.t = 1;
-  d.cueDown();                                  // Back Cue: paused, roll over
+  d.playPause();                                // pause: the roll ends where it is
   assert.equal(d.state.roll, null);
-  d.cueUp();
-  d.cueDown();                                  // Cue Point Sampler: plays while held
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(starts.length, 1, "no start on pause");
+  d.hotCue(0);                                  // sets A (paused: no start)
+  assert.equal(starts.length, 1);
+  d.hotCue(0);                                  // lit pad from pause: playback starts
+  assert.equal(starts.length, 2);
   assert.notEqual(d.state.roll, null);
+  c.t = 1;
+  d.cueDown();                                  // Back Cue: paused, roll over, loop released
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  d.cueUp();
+  d.cueDown();                                  // Cue Point Sampler plays while held
+  assert.equal(starts.length, 3);
   d.cueUp();                                    // release: back to the cue, no loop left
   assert.equal(d.state.roll, null);
   assert.deepEqual(v.loop, [null, null]);
+  d.playPause();
+  d.jogTouch(true);
+  d.jogTouch(false);                            // let go while playing: a start
+  assert.equal(starts.length, 5);
+  d.playPause();
+  d.jogTouch(true);
+  d.jogTouch(false);                            // let go while paused: no start
+  assert.equal(starts.length, 5);
 });
 
 test("roll_length_change_keeps_the_slip", () => {

@@ -33,11 +33,11 @@
 // |                      | clamps delays inside a cycle to 128 frames).           |        |
 // | Roll                 | Deck.roll(fraction) on the target deck while on        | S, R3, |
 // |                      | (1&2: both decks), roll(null) on off, on a lever move  | B      |
-// |                      | and on leaving Roll. Held: a target deck that is       |        |
-// |                      | paused rolls as soon as it starts playing; pausing     |        |
-// |                      | ends its roll and the next play rolls again. LEVEL is  |        |
-// |                      | ignored: the deck plays one stream, so the roll        |        |
-// |                      | replaces the sound.                                    |        |
+// |                      | and on leaving Roll. While Roll is on, a target deck   |        |
+// |                      | that starts playing starts rolling (Deck.onstart);     |        |
+// |                      | pausing ends its roll, the next play rolls again.      |        |
+// |                      | LEVEL is ignored: the deck plays one stream, so the    |        |
+// |                      | roll replaces the sound.                               |        |
 //
 // Not modelled (flagged): SHIFT + BEAT < (BPM Tap mode) and SHIFT + BEAT >
 // (back to Auto), SHIFT + ON/OFF (Release FX), multi/single mode, the
@@ -110,7 +110,6 @@ export class BeatFx {
     this._fi = FX_FRACTIONS.indexOf(DEFAULT_FRACTION);
     this._ni = 0;
     this._bpm = null;
-    this._rolling = [];
     this._reverbBufs = new Map();
 
     this._in = gainNode(ctx, 1);
@@ -143,6 +142,9 @@ export class BeatFx {
     f.lfo.start();
     this._in.connect(f.gate).connect(f.delay).connect(this._wet);
 
+    for (const d of this.decks) {
+      if (d && typeof d.onstart === "function") d.onstart((deck) => this._deckStarted(deck));
+    }
     this._insert = null;
     this._patch();
     this.refresh(true);
@@ -270,17 +272,22 @@ export class BeatFx {
     return this.decks.filter((d) => d);
   }
 
-  /** Hold Roll on the target decks. A deck rolls while it plays and starts
-   *  rolling when it starts playing (Deck.roll holds); only decks that took
-   *  the hold (loaded, reliable grid) are kept, so off releases exactly them. */
+  /** Beat FX owns the Roll state (on, name, target, fraction); the decks
+   *  hold none. Roll every target deck now (a deck that is paused, empty or
+   *  without a grid ignores it) ... */
   _rollOn() {
-    const decks = this._rolling.length ? this._rolling : this._targetDecks();
-    for (const d of decks) d.roll(this.state.fraction);
-    this._rolling = decks.filter((d) => d.rollHold === this.state.fraction);
+    for (const d of this._targetDecks()) d.roll(this.state.fraction);
   }
 
+  /** ... and offer it again whenever a deck starts playing. */
+  _deckStarted(deck) {
+    if (this.state.on && this.state.name === "Roll" && this._targetDecks().includes(deck)) {
+      deck.roll(this.state.fraction);
+    }
+  }
+
+  /** End the roll on every target deck (a no-op where nothing rolls). */
   _rollOff() {
-    for (const d of this._rolling) d.roll(null);
-    this._rolling = [];
+    for (const d of this._targetDecks()) d.roll(null);
   }
 }

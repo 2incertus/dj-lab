@@ -76,19 +76,14 @@ export class FakeContext {
   of(kind) { return this.nodes.filter((n) => n.kind === kind); }
 }
 
-/** A deck stand-in for Beat FX Roll: records roll() calls and, like Deck,
- *  takes the hold unless it has no reliable grid. */
+/** A deck stand-in for Beat FX Roll: records roll() calls. */
 export class FakeDeck {
   constructor(playing = true, grid = true) {
     this.state = { playing, loaded: true };
     this.grid = grid;
     this.rolls = [];
-    this.rollHold = null;
   }
-  roll(b) {
-    this.rolls.push(b);
-    this.rollHold = b === null || !this.grid ? null : b;
-  }
+  roll(b) { this.rolls.push(b); }
 }
 
 /** A deck voice stand-in (as in deck.test.js): records state, no sound. */

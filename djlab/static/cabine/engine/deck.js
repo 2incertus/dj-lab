@@ -112,16 +112,15 @@
 // (extrapolated through any loop that was active before, re-anchored on
 // tempo changes). roll(null) jumps there, scheduled SCHEDULE_LEAD_S ahead,
 // and releases the roll loop on that same frame (or re-arms the loop that
-// was active before). Roll is HELD, like the Beat FX button it serves:
-// roll(beats) on a paused deck arms the hold and the roll starts when the
-// deck starts playing (PLAY, a hot cue, the CUE preview, the jog let go);
-// pausing (PLAY, Back Cue, CUE release, track end) ends the current roll
-// where it is and keeps the hold, so the next play rolls again; roll(null)
-// releases the hold. Builder rules [B]: no reliable grid = no-op (like
-// sync and quantize); any other loop action during a roll takes over and
-// the slip is dropped (the hold stays for the next play or length change);
-// a new length during a roll keeps the in point and the slip; the hold
-// survives a load (the Beat FX button is still down).
+// was active before). The deck keeps no memory of the Beat FX button: the
+// FX unit owns that. Instead every play start (PLAY, a hot cue from pause,
+// the CUE preview, the jog let go while playing) calls the onstart(cb)
+// listeners, and Beat FX answers with roll(fraction) while Roll is on and
+// this deck is its target. Pausing (PLAY, Back Cue, CUE release, track end)
+// ends the current roll where it is (no slip). Builder rules [B]: no
+// reliable grid, a paused deck or a held jog = no-op (like sync and
+// quantize); any other loop action during a roll takes over and the slip
+// is dropped; a new length during a roll keeps the in point and the slip.
 
 import { beatPeriod, beatIndexAt, timeOfBeat, quantize, phaseAt } from "./grid.js";
 
@@ -218,7 +217,7 @@ export class Deck {
     this._anchor = { s: 0, t: 0, rate: 0 };
     this._holdUntil = -Infinity;
     this._roll = null;                 // {slip: anchor, prior: loop | null} while rolling
-    this._rollHold = null;             // beats while Beat FX Roll is held on this deck
+    this._startCbs = [];               // onstart listeners (Beat FX Roll)
     voice.onposition((s, t) => this._report(s, t));
     if (typeof voice.onended === "function") voice.onended(() => this._ended());
   }
@@ -239,8 +238,8 @@ export class Deck {
 
   get duration() { return this._duration; }
 
-  /** Beats of a held Beat FX Roll on this deck, null when not held. */
-  get rollHold() { return this._rollHold; }
+  /** cb(deck) after every play start (Beat FX re-offers Roll here). */
+  onstart(cb) { this._startCbs.push(cb); }
 
   // ---- load --------------------------------------------------------------------
 
@@ -310,7 +309,7 @@ export class Deck {
         this.voice.play();
         this._anchor = { s, t: T, rate: this._currentRate() };
       }
-      this._resumeRoll();
+      this._started();
     }
   }
 
@@ -337,7 +336,7 @@ export class Deck {
     this.voice.play();
     this._holdUntil = T;
     this._anchor = { s: st.cuePoint, t: T, rate: this._currentRate() };
-    this._resumeRoll();
+    this._started();
   }
 
   cueUp() {
@@ -393,7 +392,7 @@ export class Deck {
     this.voice.setRate(r);
     if (!st.playing) this.voice.pause();
     this._anchor = { s, t: T, rate: st.playing ? r : 0 };
-    this._resumeRoll();
+    if (st.playing) this._started();
   }
 
   /** Top plate turn: scratch while touched, SHIFT = fast search. */
@@ -643,29 +642,21 @@ export class Deck {
 
   // ---- roll (Beat FX) --------------------------------------------------------------
 
-  /** Beat FX Roll held at `beats` beats (rolls now if playing, else on the
-   *  next play); null releases it with slip (see header). */
+  /** Beat FX Roll: a slip loop of `beats` beats (a new length while
+   *  rolling); null ends it and slips back (see header). */
   roll(beats) {
     const st = this.state;
-    if (beats === null || beats === undefined) {
-      this._rollHold = null;
-      if (this._roll) this._endRoll(true);
-      return;
-    }
-    if (!st.loaded || st.noGrid || !(beats > 0)) return;
-    this._rollHold = beats;
-    if (!st.playing || st.jogTouched) return;
-    this._startRoll(beats);
+    if (beats === null || beats === undefined) { if (this._roll) this._endRoll(true); return; }
+    if (!st.loaded || !st.playing || st.noGrid || st.jogTouched || !(beats > 0)) return;
+    this._startRoll(beats, Math.max(this.now(), this._anchor.t));
   }
 
-  /** The deck just started playing: a held roll starts. */
-  _resumeRoll() {
-    const st = this.state;
-    if (this._rollHold === null || this._roll || !st.playing || st.jogTouched || st.noGrid) return;
-    this._startRoll(this._rollHold, Math.max(this.now(), this._anchor.t));
+  /** The deck just started playing: tell the listeners (Beat FX). */
+  _started() {
+    for (const cb of this._startCbs) cb(this);
   }
 
-  /** The deck is pausing: the roll stops where it is, the hold stays. */
+  /** The deck is pausing: the roll stops where it is. */
   _pauseRoll() {
     if (this._roll) this._endRoll(false);
   }
@@ -758,7 +749,7 @@ export class Deck {
         this.voice.play();
       }
       this._anchor = { ...this._anchor, rate: this._currentRate() };
-      this._resumeRoll();
+      this._started();
     }
   }
 
