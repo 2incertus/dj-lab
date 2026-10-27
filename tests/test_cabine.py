@@ -69,6 +69,25 @@ def test_library_excludes_sets(crate, client):
     assert cabine.MAX_TRACK_S == 900
 
 
+def test_library_item_has_the_exact_source_frame_count(crate, client):
+    import soundfile as sf
+    folder = crate / "sources" / "techno"
+    folder.mkdir()
+    a = folder / "a__exact.wav"
+    b = folder / "b__at-48k.wav"
+    c = folder / "c__unreadable.wav"
+    sf.write(a, np.zeros((44100 * 3 + 17, 2), dtype=np.float32), 44100)
+    sf.write(b, np.zeros((48000 * 2 + 1, 2), dtype=np.float32), 48000)
+    c.write_bytes(b"x")
+    entries = [{"file": p.name, "duration_s": 3.0, "bpm": 128.0} for p in (a, b, c)]
+    (crate / "analysis.json").write_text(json.dumps(entries))
+    tracks = {t["file"]: t for t in client.get("/api/cabine/library").json()["tracks"]}
+    # the carried file's frame count at 44.1 kHz: the loader compares the decode with it
+    assert tracks[a.name]["samples"] == 44100 * 3 + 17
+    assert tracks[b.name]["samples"] == round((48000 * 2 + 1) * 44100 / 48000)
+    assert tracks[c.name]["samples"] is None
+
+
 def test_carry_mp3_aligned_with_wav(crate, wav_file):
     src = wav_file(bpm=128.0, seconds=4, offset_s=0.25)
     out = cabine.carry_mp3(src)

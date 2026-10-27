@@ -14,6 +14,37 @@ def test_fit_recovers_bpm_and_phase():
     assert g["reliable"] is True
 
 
+def test_fit_stores_bpm_with_four_decimals():
+    # exact beats at a tempo with more than two decimals: the sidecar keeps
+    # four (display rounding is the client's job)
+    bpm = 127.98765
+    beats = 0.37 + np.arange(1900) * 60 / bpm
+    g = fit_constant_grid(beats, None)
+    assert g["bpm"] == round(bpm, 4) == 127.9877
+    assert g["first_beat_s"] == pytest.approx(0.37, abs=1e-5)
+
+
+def test_fit_grid_stays_on_the_beats_over_a_long_track():
+    # ~15 minutes at 127.98765 BPM: two-decimal rounding (127.99) drifts
+    # 16 ms over the track; four decimals keep every grid beat within 1 ms
+    bpm = 127.98765
+    beats = 0.37 + np.arange(1900) * 60 / bpm
+    g = fit_constant_grid(beats, None)
+    grid_beats = g["first_beat_s"] + np.arange(1900) * 60 / g["bpm"]
+    worst = float(np.max(np.abs(grid_beats - beats)))
+    assert worst < 0.001, f"grid off the beats by {worst * 1000:.2f} ms"
+
+
+def test_two_decimal_sidecars_stay_valid(tmp_path):
+    src = tmp_path / "old.wav"
+    src.write_bytes(b"")
+    g = {"bpm": 127.99, "first_beat_s": 0.37, "downbeat_s": 0.37, "beat_cv": 0.01,
+         "reliable": True, "source": "beat_this", "fixed": False}
+    save_grid(src, g)
+    assert load_grid(src) == g
+    assert apply_fix(g, "double")["bpm"] == 255.98
+
+
 def test_fit_flags_rubato():
     rng = np.random.default_rng(2)
     beats = np.cumsum(rng.uniform(0.35, 0.65, 300))

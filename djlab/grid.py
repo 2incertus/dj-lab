@@ -23,6 +23,7 @@ import numpy as np
 from .audio import load
 
 BEAT_THIS_SR = 22050
+BPM_DECIMALS = 4           # stored precision: 0.00005 BPM is < 1 ms over 15 minutes
 BEATS_PER_BAR = 4          # the FLX4 / rekordbox grid is 4/4
 RUBATO_CV = 0.12           # same threshold as analyze.warp_verdict
 MAX_TRACK_S = 900          # A Cabine refuses longer files (sets, not tracks)
@@ -77,12 +78,12 @@ def fit_constant_grid(beat_times: np.ndarray, downbeat_times: np.ndarray | None)
         slope, intercept = np.polyfit(idx[inl], times[inl], 1)
         idx, times = idx[inl], times[inl]
 
-    bpm = round(60.0 / slope, 2)
+    # four decimals: the rounding error is far below the fit's, so the
+    # line's own intercept stays the phase (no re-solve for the rounded
+    # tempo); the client rounds for display
+    bpm = round(60.0 / slope, BPM_DECIMALS)
     period = 60.0 / bpm
-    # re-solve the phase for the rounded tempo so the grid the board draws
-    # (bpm, first_beat_s) is the best fit, not just the unrounded line
-    intercept = float(np.mean(times - idx * period))
-    first = _wrap(intercept, period)
+    first = _wrap(float(intercept), period)
 
     downbeat = first
     if downbeat_times is not None and len(downbeat_times) > 0:
@@ -183,11 +184,11 @@ def apply_fix(g: Grid, op: str, value: float | None = None) -> Grid:
     out = dict(g)
     period = 60.0 / g["bpm"]
     if op == "halve":
-        out["bpm"] = round(g["bpm"] / 2, 2)
+        out["bpm"] = round(g["bpm"] / 2, BPM_DECIMALS)
         # keep the downbeat on the grid: it anchors the surviving beats
         out["first_beat_s"] = _wrap(g["downbeat_s"], 60.0 / out["bpm"])
     elif op == "double":
-        out["bpm"] = round(g["bpm"] * 2, 2)
+        out["bpm"] = round(g["bpm"] * 2, BPM_DECIMALS)
         out["first_beat_s"] = _wrap(g["first_beat_s"], 60.0 / out["bpm"])
     elif op == "nudge":
         if value is None:

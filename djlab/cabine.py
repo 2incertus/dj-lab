@@ -53,6 +53,23 @@ def _carry_out(src: Path) -> Path:
     return CARRY / (src.stem + ".mp3")
 
 
+def source_samples(src: Path) -> int | None:
+    """Frames of the carried file (44.1 kHz) the source makes: its exact
+    frame count at 44.1 kHz, scaled for other rates. The loader compares the
+    decoded MP3 with it (encoder delay and padding left in by the decoder).
+    None when the header cannot be read."""
+    try:
+        import soundfile as sf
+        info = sf.info(str(src))
+    except Exception:
+        return None
+    if not info.frames or not info.samplerate:
+        return None
+    if info.samplerate == SR:
+        return int(info.frames)
+    return int(round(info.frames * SR / info.samplerate))
+
+
 def library() -> list[dict]:
     aj = rc.ROOT / "analysis.json"
     if not aj.exists():
@@ -73,6 +90,7 @@ def library() -> list[dict]:
             "title": title_of(src),
             "folder": src.parent.name,
             "duration_s": dur,
+            "samples": source_samples(src),
             "bpm": e.get("bpm"),
             "key": e.get("key"),
             "camelot": e.get("camelot"),
