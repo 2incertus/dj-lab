@@ -22,7 +22,7 @@ class FakeVoice {
   load(pcm) { this.calls.push(["load"]); this.pcm = pcm; this.pos = 0; this.running = false; this.loop = [null, null]; }
   setRate(r, immediate = false) { this.calls.push(["rate", r, immediate]); this.rate = r; this.immediate = immediate; }
   seek(s, at) { this.calls.push(["seek", s, at]); this.seeks.push({ s, at }); this.pos = s; }
-  setLoop(a, b) { this.calls.push(["loop", a, b]); this.loop = [a, b]; }
+  setLoop(a, b, at) { this.calls.push(["loop", a, b, at]); this.loop = [a, b]; this.loopAt = at; }
   play(at) { this.calls.push(["play", at]); this.running = true; this.playAt = at; }
   pause() { this.calls.push(["pause"]); this.running = false; }
   get position() { return this.pos; }
@@ -512,6 +512,125 @@ test("shift_jog_top_is_fast_search", () => {
   assert.equal(d.state.shift, false);
 });
 
+// ---- roll (Beat FX "Roll", ruling R3) ---------------------------------------
+
+test("roll_slips_back_to_where_playback_would_have_been", () => {
+  const { c, v, d } = setup(grid(120));         // 0.5 s per beat
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);                                    // 1 beat from the beat at/below 10.1
+  assert.deepEqual(v.loop, [10.0, 10.5]);
+  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  assert.equal(d.state.loop.active, true);
+  c.advance(0.7);                               // 10.1 + 0.7 = 10.8 -> wraps to 10.3
+  assert.ok(near(d.posAt(), 10.3, 1e-9), `rolling at ${d.posAt()}`);
+  c.advance(1.25 - 0.7);                        // held 2.5 beats in all
+  const before = v.seeks.length;
+  d.roll(null);
+  assert.equal(v.seeks.length, before + 1, "one jump back to the slip position");
+  assert.ok(Math.abs(d.posAt() - (10.1 + 2.5 * 0.5)) < 0.001,
+    `slip landed at ${d.posAt()}, want ${10.1 + 1.25}`);
+  const s = v.lastSeek();
+  assert.ok(s.at > c.t, "the return is scheduled on the audio clock");
+  assert.ok(Math.abs(s.s - (10.1 + (s.at - 0))) < 1e-9, "seek lands where play would be at that frame");
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(v.loopAt, s.at, "the roll loop is released on the same frame as the jump");
+  assert.equal(d.state.roll, null);
+  assert.equal(d.state.loop.active, false);
+  assert.equal(d.state.playing, true);
+});
+
+test("roll_with_no_reliable_grid_is_a_noop", () => {
+  const { v, d } = setup(grid(120, 0, { reliable: false }));
+  d.playPause();
+  v.report(10.1, 0);
+  const n = v.calls.length;
+  d.roll(1);
+  assert.equal(d.state.roll, null);
+  assert.equal(d.state.loop.active, false);
+  assert.equal(v.calls.length, n, "no loop, no seek");
+  d.roll(null);
+  assert.equal(v.calls.length, n);
+});
+
+test("roll_on_a_paused_deck_is_a_noop", () => {
+  const { v, d } = setup(grid(120));
+  v.report(10.1, 0);
+  d.roll(1);
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+});
+
+test("roll_length_change_keeps_the_slip", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.3, 0);
+  d.roll(0.25);                                 // quarter at/below 10.3: 10.25 .. 10.375
+  assert.deepEqual(v.loop, [10.25, 10.375]);
+  c.advance(0.4);
+  d.roll(2);                                    // longer roll, same in point
+  assert.deepEqual(v.loop, [10.25, 11.25]);
+  c.advance(0.6);
+  d.roll(null);
+  assert.ok(Math.abs(d.posAt() - 11.3) < 0.001, `slip ${d.posAt()}`);
+});
+
+test("roll_three_quarters_snaps_to_the_quarter", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.3, 0);
+  d.roll(0.75);
+  assert.deepEqual(v.loop, [10.25, 10.625]);
+});
+
+test("roll_over_an_active_loop_restores_it", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.fourBeatExit();                             // loop 10 .. 12
+  d.roll(0.5);                                  // 10.0 .. 10.25
+  assert.deepEqual(v.loop, [10.0, 10.25]);
+  c.advance(2.0);                               // without the roll: 10.1 + 2.0 = 12.1 -> 10.1
+  d.roll(null);
+  assert.deepEqual(v.loop, [10.0, 12.0], "the 4-beat loop is back");
+  assert.equal(d.state.loop.active, true);
+  assert.equal(d.state.loop.beats, 4);
+  assert.ok(Math.abs(d.posAt() - 10.1) < 0.001, `slip inside the old loop ${d.posAt()}`);
+});
+
+test("roll_slip_follows_a_tempo_change", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  c.advance(0.5);
+  d.setTempo(1);                                // +10 %
+  c.advance(0.5);
+  d.roll(null);
+  assert.ok(Math.abs(d.posAt() - (10.1 + 0.5 + 0.55)) < 0.001, `slip ${d.posAt()}`);
+});
+
+test("another_loop_action_takes_over_from_a_roll", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  d.fourBeatExit();                             // exits the loop: no slip any more
+  assert.equal(d.state.roll, null);
+  const n = v.seeks.length;
+  d.roll(null);
+  assert.equal(v.seeks.length, n, "ending a dropped roll does nothing");
+});
+
+test("load_clears_a_roll", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  d.load(track(grid(125)));
+  assert.equal(d.state.roll, null);
+});
+
 // ---- contract -------------------------------------------------------------
 
 test("every control-map action is a Deck method", () => {
@@ -521,7 +640,7 @@ test("every control-map action is a Deck method", () => {
   for (const name of ["playPause", "shiftPlayPause", "cueDown", "cueUp", "shiftCue", "jogTouch",
     "jogTurn", "jogRing", "setTempo", "cycleRange", "syncPress", "loopIn", "loopOut",
     "fourBeatExit", "shiftFourBeatExit", "loopHalve", "loopDouble", "hotCue", "shiftHotCue",
-    "beatJump", "beatLoop", "effectiveBpm", "load"]) {
+    "beatJump", "beatLoop", "effectiveBpm", "load", "roll"]) {
     assert.ok(DECK_ACTIONS.includes(name), name);
   }
 });

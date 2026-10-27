@@ -104,6 +104,18 @@
 // helpers _engageLoop / _exitLoop are the only places that arm or disarm the
 // voice's loop, so a slip roll (Task 7, Deck.roll) can wrap them and resume
 // from posAt-style bookkeeping of where playback would have been.
+//
+// Roll (Task 7, ruling R3; Beat FX "Roll" drives it). roll(beats) arms a
+// loop of `beats` beats from the current beat (floored to the quarter for
+// rolls under a beat, to the beat otherwise) and keeps a second, silent
+// anchor: the slip position, where playback would be without the roll
+// (extrapolated through any loop that was active before, re-anchored on
+// tempo changes). roll(null) jumps there, scheduled SCHEDULE_LEAD_S ahead,
+// and releases the roll loop on that same frame (or re-arms the loop that
+// was active before). Builder rules [B]: no reliable grid = no-op (like
+// sync and quantize); a paused deck does not roll; pausing ends the roll
+// where it is; any other loop action during a roll takes over and the slip
+// is dropped; a new length during a roll keeps the in point and the slip.
 
 import { beatPeriod, beatIndexAt, timeOfBeat, quantize, phaseAt } from "./grid.js";
 
@@ -119,6 +131,7 @@ export const BEND_PER_TURN_PER_S = 0.10;
 export const MAX_BEND = 0.30;
 export const LOOP_ADJUST_S_PER_TURN = 0.5;
 export const SCHEDULE_LEAD_S = 0.03;
+export const ROLL_MIN_UNIT = 0.25;                     // sub-beat rolls start on a quarter
 const SCRATCH_TAU_S = 0.03;          // the record closes the gap to the finger in ~30 ms
 const SCRATCH_TICK_MS = 15;
 const SCRATCH_DONE_S = 0.0005;
@@ -132,11 +145,21 @@ export const DECK_ACTIONS = [
   "jogTouch", "jogTurn", "jogRing", "setTempo", "cycleRange", "syncPress",
   "loopIn", "loopOut", "fourBeatExit", "shiftFourBeatExit", "loopHalve", "loopDouble",
   "hotCue", "shiftHotCue", "beatJump", "shiftBeatJump", "beatLoop",
-  "setShift", "effectiveBpm", "load",
+  "setShift", "effectiveBpm", "load", "roll",
 ];
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const emptyLoop = () => ({ in: null, out: null, active: false, beats: null, pad: null, adjust: null });
+
+/** Where an anchor {s, t, rate} puts the playhead at T, wrapping at the OUT
+ *  of loop L when it is active (forward play only), clamped to [0, dur]. */
+function extrapolate(a, L, T, dur) {
+  let s = a.s + (T - a.t) * a.rate;
+  if (L && L.active && a.rate > 0 && a.s < L.out && s >= L.out) {
+    s = L.in + ((s - L.out) % (L.out - L.in));
+  }
+  return clamp(s, 0, dur);
+}
 
 function normalizeHotCues(list) {
   const out = new Array(8).fill(null);
@@ -155,7 +178,7 @@ function freshState(range = DEFAULT_RANGE, shift = false) {
     loaded: false, playing: false, cuePoint: 0, hotCues: new Array(8).fill(null),
     loop: emptyLoop(), tempoPct: 0, range, syncOn: false, shift,
     noGrid: true, quantize: true, jogTouched: false, cueHeld: false,
-    activeLoop: null, beatJumpScale: 0,
+    activeLoop: null, beatJumpScale: 0, roll: null,
   };
 }
 
@@ -188,6 +211,7 @@ export class Deck {
     this._duration = Infinity;
     this._anchor = { s: 0, t: 0, rate: 0 };
     this._holdUntil = -Infinity;
+    this._roll = null;                 // {slip: anchor, prior: loop | null} while rolling
     voice.onposition((s, t) => this._report(s, t));
     if (typeof voice.onended === "function") voice.onended(() => this._ended());
   }
@@ -196,13 +220,7 @@ export class Deck {
 
   /** Playhead (track seconds) at audio-clock time T. */
   posAt(T = this.now()) {
-    const a = this._anchor;
-    let s = a.s + (T - a.t) * a.rate;
-    const L = this.state.loop;
-    if (L.active && a.rate > 0 && a.s < L.out && s >= L.out) {
-      s = L.in + ((s - L.out) % (L.out - L.in));
-    }
-    return clamp(s, 0, this._duration);
+    return extrapolate(this._anchor, this.state.loop, T, this._duration);
   }
 
   /** BPM with tempo / sync applied (pitch bend excluded), null if unknown. */
@@ -234,6 +252,7 @@ export class Deck {
     this._bend = 0;
     this._scratchRate = 0;
     this._cueLatch = false;
+    this._roll = null;
     this.state = {
       ...freshState(this.state.range, this.state.shift),
       loaded: true,
@@ -255,6 +274,7 @@ export class Deck {
     const T = this.now();
     const s = this.posAt(T);
     if (st.playing) {
+      if (this._roll) this._endRoll(false);
       st.playing = false;
       if (!st.jogTouched) this.voice.pause();
       this._anchor = { s, t: T, rate: this._currentRate() };
@@ -578,8 +598,9 @@ export class Deck {
 
   /** Arm the voice's loop [inS, outS). wrapNow: if the playhead is already
    *  past OUT, fold it back inside (keeps the beat for whole-beat loops). */
-  _engageLoop(inS, outS, T, { wrapNow = true, beats = null, pad = null } = {}) {
+  _engageLoop(inS, outS, T, { wrapNow = true, beats = null, pad = null, roll = false } = {}) {
     const st = this.state;
+    if (!roll) this._dropRoll();
     const s = this.posAt(T);
     const L = st.loop;
     L.in = inS; L.out = outS; L.active = true; L.beats = beats; L.pad = pad; L.adjust = null;
@@ -591,6 +612,7 @@ export class Deck {
 
   _exitLoop() {
     const st = this.state;
+    this._dropRoll();
     const T = this.now();
     const s = this.posAt(T);
     st.loop.active = false;
@@ -600,6 +622,71 @@ export class Deck {
     st.activeLoop = null;
     this.voice.setLoop(null, null);
     this._anchor = { s, t: T, rate: this._currentRate() };
+  }
+
+  // ---- roll (Beat FX) --------------------------------------------------------------
+
+  /** Beat FX Roll: a slip loop of `beats` beats; null ends it (see header). */
+  roll(beats) {
+    const st = this.state;
+    if (beats === null || beats === undefined) { if (this._roll) this._endRoll(true); return; }
+    if (!st.loaded || !st.playing || st.noGrid || st.jogTouched || !(beats > 0)) return;
+    const p = beatPeriod(this.grid);
+    const T = this.now();
+    if (this._roll) {                               // new length: same in point, same slip
+      const inS = st.roll.in;
+      const outS = Math.min(inS + beats * p, this._duration);
+      if (outS - inS < MIN_LOOP_S) return;
+      this._engageLoop(inS, outS, T, { wrapNow: true, beats, roll: true });
+      st.roll = { beats, in: inS, out: outS };
+      return;
+    }
+    let unit = Math.min(1, beats);
+    if (!Number.isInteger(Math.log2(unit))) unit = ROLL_MIN_UNIT;
+    const s = this.posAt(T);
+    const n = Math.floor(beatIndexAt(this.grid, s) / unit + 1e-9) * unit;
+    const inS = Math.max(0, timeOfBeat(this.grid, n));
+    const outS = Math.min(inS + beats * p, this._duration);
+    if (outS - inS < MIN_LOOP_S) return;
+    const L = st.loop;
+    const prior = L.active ? { ...L } : null;
+    this._dropRoll();
+    this._engageLoop(inS, outS, T, { wrapNow: true, beats, roll: true });
+    this._roll = { slip: { s, t: T, rate: this._playRate() }, prior };
+    st.roll = { beats, in: inS, out: outS };
+  }
+
+  /** Where playback would be at T without the roll. */
+  _slipAt(T, r = this._roll) {
+    return extrapolate(r.slip, r.prior, T, this._duration);
+  }
+
+  /** End the roll: back to the slip position (slip) or stay where it is. */
+  _endRoll(slip) {
+    const st = this.state;
+    const r = this._roll;
+    this._roll = null;
+    st.roll = null;
+    const moving = st.playing && !st.jogTouched;
+    const T = this.now() + (slip && moving ? SCHEDULE_LEAD_S : 0);
+    const target = slip ? this._slipAt(T, r) : this.posAt(T);
+    if (r.prior) {
+      st.loop = { ...r.prior, adjust: null };
+      this.voice.setLoop(r.prior.in, r.prior.out, T);
+    } else {
+      st.loop = { ...st.loop, active: false, beats: null, pad: null, adjust: null };
+      this.voice.setLoop(null, null, T);
+    }
+    if (!slip) { this._anchor = { s: target, t: T, rate: this._currentRate() }; return; }
+    if (moving) this._seekAt(target, T);
+    else this._seekNow(target, T);
+  }
+
+  /** Another loop action took over: forget the slip, keep the loop state. */
+  _dropRoll() {
+    if (!this._roll) return;
+    this._roll = null;
+    this.state.roll = null;
   }
 
   // ---- pads: hot cue, beat jump -------------------------------------------------------
@@ -691,6 +778,7 @@ export class Deck {
     const s = this.posAt(T);
     if (!st.jogTouched) this.voice.setRate(this._playRate());
     this._anchor = { s, t: T, rate: this._currentRate() };
+    if (this._roll) this._roll.slip = { s: this._slipAt(T), t: T, rate: this._playRate() };
   }
 
   _tempoChanged() {

@@ -9,7 +9,7 @@
 // Messages in:  {type:"load", left, right, sampleRate?} (buffers transferred)
 //               {type:"rate", value, immediate?}
 //               {type:"seek", s, at?}        at = audio-clock time, null = now
-//               {type:"loop", start, end}    seconds, null/null = off
+//               {type:"loop", start, end, at?} seconds, null/null = off; at as seek
 //               {type:"run", on, at?}        at = audio-clock time, null = now
 //               {type:"ping", id}            answered with {type:"pong", id, s, t, seq}
 //               {type:"stall", ms}           test hook: block the render thread once
@@ -46,6 +46,9 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     this.running = false;
     this.loopStart = -1;           // source frames; loopEnd < 0 = no loop
     this.loopEnd = -1;
+    this.pendLoopStart = -1;
+    this.pendLoopEnd = -1;
+    this.loopFrame = -1;           // absolute output frame of a pending loop change, -1 = none
     this.seekTo = 0;
     this.seekFrame = -1;           // absolute output frame of a pending jump, -1 = none
     this.runOn = false;
@@ -76,6 +79,7 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
         this.loopEnd = -1;
         this.seekFrame = -1;
         this.runFrame = -1;
+        this.loopFrame = -1;
         this.port.postMessage({ type: "loaded", frames: this.n, seq: this.seq });
         break;
       }
@@ -105,12 +109,20 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
         break;
       }
       case "loop": {
-        if (d.start === null || d.end === null || !(d.end > d.start)) {
-          this.loopStart = this.loopEnd = -1;
+        let ls = -1, le = -1;
+        if (!(d.start === null || d.end === null || !(d.end > d.start))) {
+          ls = Math.max(0, d.start * this.srcRate);
+          le = Math.min(d.end * this.srcRate, this.n);
+          if (!(le > ls)) ls = le = -1;
+        }
+        if (d.at === null || d.at === undefined || d.at <= currentTime) {
+          this.loopStart = ls;
+          this.loopEnd = le;
+          this.loopFrame = -1;                   // a later command wins over a pending one
         } else {
-          this.loopStart = Math.max(0, d.start * this.srcRate);
-          this.loopEnd = Math.min(d.end * this.srcRate, this.n);
-          if (!(this.loopEnd > this.loopStart)) this.loopStart = this.loopEnd = -1;
+          this.pendLoopStart = ls;
+          this.pendLoopEnd = le;
+          this.loopFrame = Math.round(d.at * sampleRate);
         }
         break;
       }
@@ -157,6 +169,11 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     let pos = this.pos;
     let ended = false;
     for (let i = 0; i < frames; i++) {
+      if (this.loopFrame >= 0 && f0 + i >= this.loopFrame) {
+        this.loopStart = this.pendLoopStart;
+        this.loopEnd = this.pendLoopEnd;
+        this.loopFrame = -1;
+      }
       if (this.seekFrame >= 0 && f0 + i >= this.seekFrame) {
         pos = this.seekTo;
         this.seekFrame = -1;
@@ -221,7 +238,7 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     if (++this.quanta >= POS_EVERY) {
       this.quanta = 0;
       this.port.postMessage({ type: "pos", s: pos / this.srcRate,
-        t: (f0 + frames) / sampleRate, seq: this.seq, pending: this.seekFrame >= 0 || this.runFrame >= 0 });
+        t: (f0 + frames) / sampleRate, seq: this.seq, pending: this.seekFrame >= 0 || this.runFrame >= 0 || this.loopFrame >= 0 });
     }
     return true;
   }

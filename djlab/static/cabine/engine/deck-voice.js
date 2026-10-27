@@ -78,7 +78,10 @@ export class DeckVoice {
     this._post({ type: "seek", s: seconds, at: atTime === undefined ? null : atTime });
   }
 
-  setLoop(startS, endS) { this._post({ type: "loop", start: startS, end: endS }); }
+  /** Loop [startS, endS) now, or from audio-clock time atTime (exact frame). */
+  setLoop(startS, endS, atTime) {
+    this._post({ type: "loop", start: startS, end: endS, at: atTime === undefined ? null : atTime });
+  }
 
   /** Start now, or at audio-clock time atTime (lands on that exact frame). */
   play(atTime) {

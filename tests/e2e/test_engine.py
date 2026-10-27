@@ -185,3 +185,36 @@ def test_scheduled_start_lands_with_its_seek(proof_page, carried):
     print(f"\nscheduled start: silent before {r['before']}, onset {1000 * (r['onset'] - r['expect']):+.3f} ms")
     assert r["before"] == 0, "sound before the scheduled start"
     assert abs(r["onset"] - r["expect"]) < 0.001, r
+
+
+def test_scheduled_loop_release_lands_with_its_seek(proof_page, carried):
+    """setLoop(null, null, at) + seek(s, at): the loop holds until frame at,
+    then playback continues from s (how a Beat FX roll returns to its slip
+    position). The loop [1.0, 1.1) holds no click; released early, the
+    playhead would run on into the click at 1.25 before at."""
+    r = proof_page.evaluate("async (file) => {" + IMPORTS + """
+      const sr = 44100;
+      const ctx = new OfflineAudioContext(2, sr, sr);
+      const track = await loadTrack(ctx, networkSource(), file);
+      const voice = await DeckVoice.create(ctx);
+      voice.connect(ctx.destination);
+      voice.load(track.pcm);
+      voice.seek(1.0);
+      voice.setLoop(1.0, 1.1);
+      voice.play();
+      const at = 0.4, s = 1.2;            // next click 1.25 -> sounds at 0.45
+      voice.setLoop(null, null, at);
+      voice.seek(s, at);
+      await voice.sync();
+      const out = await ctx.startRendering();
+      const L = out.getChannelData(0);
+      const atF = Math.round(at * sr);
+      let before = 0;
+      for (let i = 0; i < atF; i++) before = Math.max(before, Math.abs(L[i]));
+      let k = -1;
+      for (let i = atF; i < L.length; i++) { if (Math.abs(L[i]) > 0.2) { k = i; break; } }
+      return { before, onset: k / sr, expect: at + (1.25 - s) };
+    }""", carried["click120"])
+    print(f"\nscheduled loop release: before {r['before']}, onset {1000 * (r['onset'] - r['expect']):+.3f} ms")
+    assert r["before"] < 0.05, "the loop let go before its frame"
+    assert abs(r["onset"] - r["expect"]) < 0.001, r
