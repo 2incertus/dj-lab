@@ -1,0 +1,219 @@
+/* A Cabine. Every selector is under a .cab- prefix (the mesa's classes
+   must never collide). The crate uses the mesa's paper palette; the dark
+   board styling comes with the board. */
+
+/* ---------- shell ---------- */
+.cab-body {
+  --cab-paper: oklch(0.955 0.018 85);
+  --cab-paper-deep: oklch(0.92 0.028 80);
+  --cab-ink: oklch(0.26 0.02 55);
+  --cab-ink-soft: oklch(0.42 0.02 55);
+  --cab-terra: oklch(0.58 0.15 42);
+  --cab-terra-deep: oklch(0.48 0.14 40);
+  --cab-palm: oklch(0.46 0.08 155);
+  --cab-rule: oklch(0.26 0.02 55 / 0.22);
+  --cab-mono: "SF Mono", ui-monospace, Menlo, monospace;
+  margin: 0;
+  background: var(--cab-paper);
+  background-image: radial-gradient(oklch(0.26 0.02 55 / 0.045) 1px, transparent 1px);
+  background-size: 26px 26px;
+  color: var(--cab-ink);
+  font: 15px/1.45 "Archivo", system-ui, -apple-system, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+.cab-body *, .cab-body *::before, .cab-body *::after { box-sizing: border-box; }
+.cab-body [hidden] { display: none !important; }
+
+.cab-root {
+  min-height: 100dvh;
+  padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+}
+
+/* ---------- buttons, inputs ---------- */
+.cab-btn {
+  font: 600 14px/1.1 "Archivo", system-ui, sans-serif;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1.5px solid var(--cab-ink);
+  background: transparent;
+  color: var(--cab-ink);
+  touch-action: manipulation;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cab-btn small { font-weight: 400; font-size: 11px; opacity: 0.75; }
+.cab-btn:disabled { opacity: 0.4; cursor: default; }
+.cab-btn:active:not(:disabled) { transform: translateY(1px); }
+.cab-btn-terra { background: var(--cab-terra); border-color: var(--cab-terra-deep); color: oklch(0.99 0.01 85); }
+.cab-btn-ink { background: var(--cab-ink); color: var(--cab-paper); }
+.cab-btn-quiet { border-color: var(--cab-rule); background: oklch(1 0 0 / 0.55); }
+.cab-btn:focus-visible, .cab-input:focus-visible, .cab-tab:focus-visible, .cab-chip:focus-visible {
+  outline: 2px solid var(--cab-terra); outline-offset: 2px;
+}
+
+.cab-input {
+  font: 16px/1.2 "Archivo", system-ui, sans-serif;   /* 16 px: iOS does not zoom on focus */
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1.5px solid var(--cab-rule);
+  border-radius: 10px;
+  background: oklch(1 0 0 / 0.7);
+  color: var(--cab-ink);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cab-link {
+  font: inherit; color: var(--cab-terra-deep); background: none; border: 0; padding: 0;
+  text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+
+/* ---------- crate ---------- */
+.cab-crate { max-width: 640px; margin: 0 auto; display: grid; gap: 14px; }
+
+.cab-crate-head {
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;
+  border-bottom: 2px solid var(--cab-ink); padding-bottom: 10px;
+}
+.cab-crate-h1 {
+  font: 900 40px/0.95 "Fraunces", Georgia, serif; letter-spacing: -0.02em; margin: 0;
+}
+.cab-crate-sub { margin: 6px 0 0; color: var(--cab-ink-soft); font-size: 13px; }
+.cab-crate-head .cab-btn { flex-direction: column; gap: 2px; min-height: 52px; }
+
+.cab-h2 { font: 600 22px/1.1 "Fraunces", Georgia, serif; margin: 0; }
+.cab-h2 small { font: 400 12px "Archivo", system-ui, sans-serif; color: var(--cab-ink-soft); margin-left: 4px; }
+
+.cab-panel {
+  background: oklch(1 0 0 / 0.45);
+  border: 1px solid var(--cab-rule);
+  border-radius: 14px;
+  padding: 14px 12px;
+  display: grid;
+  gap: 10px;
+}
+
+/* storage */
+.cab-storage {
+  display: grid; gap: 6px; padding: 8px 12px; border-left: 4px solid var(--cab-palm);
+  background: oklch(1 0 0 / 0.45); border-radius: 0 10px 10px 0;
+}
+.cab-storage-text { margin: 0; font-size: 13px; display: grid; gap: 2px; }
+.cab-storage-text span { color: var(--cab-ink-soft); }
+
+/* search */
+.cab-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border: 1.5px solid var(--cab-ink); border-radius: 10px; overflow: hidden; }
+.cab-tab {
+  font: 600 13px "Archivo", system-ui, sans-serif; min-height: 40px; border: 0; background: transparent;
+  color: var(--cab-ink); touch-action: manipulation; cursor: pointer;
+}
+.cab-tab + .cab-tab { border-left: 1.5px solid var(--cab-ink); }
+.cab-tab[aria-selected="true"] { background: var(--cab-ink); color: var(--cab-paper); }
+.cab-search-form { display: flex; gap: 8px; }
+.cab-context { font-size: 13px; background: var(--cab-paper-deep); border-radius: 8px; padding: 8px 10px; }
+.cab-msg { margin: 0; font-size: 13px; color: var(--cab-ink-soft); }
+.cab-msg-ok { color: var(--cab-palm); }
+.cab-msg-fail { color: var(--cab-terra-deep); font-weight: 600; }
+
+.cab-results, .cab-tracks { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.cab-result, .cab-track {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center;
+  padding: 10px 2px; border-top: 1px solid var(--cab-rule);
+}
+.cab-result:first-child, .cab-track:first-child { border-top: 0; }
+.cab-result-main, .cab-track-main { display: grid; gap: 2px; min-width: 0; }
+.cab-result-main b, .cab-track-title {
+  font-weight: 600; font-size: 14px; line-height: 1.25;
+  overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.cab-result-main span, .cab-track-sub { font-size: 12px; color: var(--cab-ink-soft); }
+.cab-too-long .cab-result-main b { color: var(--cab-ink-soft); }
+.cab-flag {
+  justify-self: start; font-size: 12px !important; font-weight: 600; color: var(--cab-terra-deep) !important;
+  border: 1px solid var(--cab-terra-deep); border-radius: 6px; padding: 1px 7px; margin-top: 2px;
+}
+
+/* job status */
+.cab-job {
+  font-size: 13px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--cab-ink);
+  background: var(--cab-paper-deep); display: grid; gap: 2px; overflow-wrap: anywhere;
+}
+.cab-job span { font-family: var(--cab-mono); font-size: 12px; color: var(--cab-ink-soft); }
+.cab-job-ok { border-color: var(--cab-palm); }
+.cab-job-fail { border-color: var(--cab-terra-deep); }
+.cab-job-fail b { color: var(--cab-terra-deep); }
+
+/* library */
+.cab-lib-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.cab-lib-tools { display: flex; gap: 8px; }
+.cab-chip {
+  font: 600 13px "Archivo", system-ui, sans-serif; min-height: 44px; padding: 0 12px; border-radius: 22px;
+  border: 1.5px solid var(--cab-rule); background: transparent; color: var(--cab-ink); white-space: nowrap;
+  touch-action: manipulation; cursor: pointer;
+}
+.cab-chip[aria-pressed="true"] { background: var(--cab-palm); border-color: var(--cab-palm); color: var(--cab-paper); }
+.cab-offline { background: var(--cab-paper-deep); border-radius: 8px; padding: 8px 10px; color: var(--cab-ink); }
+.cab-track-actions { display: flex; gap: 6px; }
+.cab-track-actions .cab-btn { min-width: 64px; }
+.cab-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.cab-badges:empty { display: none; }
+.cab-badge {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 5px; border: 1px solid var(--cab-rule); color: var(--cab-ink-soft);
+}
+.cab-badge-phone { background: var(--cab-palm); border-color: var(--cab-palm); color: var(--cab-paper); }
+.cab-badge-pending { border-color: var(--cab-terra); color: var(--cab-terra-deep); }
+.cab-badge-warn { border-color: var(--cab-terra-deep); color: var(--cab-terra-deep); }
+.cab-on-phone .cab-track-title { color: var(--cab-ink); }
+.cab-carrying { font-size: 13px; font-weight: 600; color: var(--cab-palm); min-width: 64px; text-align: right; }
+.cab-progress { grid-column: 1 / -1; height: 3px; background: var(--cab-paper-deep); border-radius: 2px; overflow: hidden; }
+.cab-progress span { display: block; height: 100%; background: var(--cab-palm); transition: width 0.2s; }
+.cab-empty { padding: 16px 2px; color: var(--cab-ink-soft); font-size: 14px; }
+
+/* ---------- grid fix sheet ---------- */
+.cab-sheet-back {
+  position: fixed; inset: 0; background: oklch(0.2 0.02 55 / 0.45); display: flex; align-items: flex-end;
+  justify-content: center; z-index: 10;
+}
+.cab-sheet-back[hidden] { display: none; }
+.cab-sheet {
+  width: min(640px, 100%); background: var(--cab-paper); border-radius: 18px 18px 0 0;
+  padding: 10px max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: grid; gap: 10px; box-shadow: 0 -8px 30px oklch(0.2 0.02 55 / 0.25);
+  max-height: 92dvh; overflow-y: auto;
+}
+.cab-sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--cab-rule); justify-self: center; }
+.cab-sheet-h { font: 600 24px/1.1 "Fraunces", Georgia, serif; margin: 0; }
+.cab-sheet-track { margin: 0; font-size: 13px; color: var(--cab-ink-soft); overflow-wrap: anywhere; }
+.cab-sheet-grid { margin: 0; font-size: 14px; }
+.cab-sheet-hint { margin: 0; font-size: 12px; color: var(--cab-ink-soft); }
+.cab-sheet-row { display: flex; gap: 8px; }
+.cab-wide { flex: 1 1 0; }
+.cab-nudges .cab-btn { flex: 1 1 0; padding: 0 4px; }
+.cab-sheet-done { justify-self: stretch; }
+.cab-beats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.cab-beats i { height: 10px; border-radius: 5px; background: var(--cab-paper-deep); border: 1px solid var(--cab-rule); }
+.cab-beats i:first-child { border-color: var(--cab-terra); }
+.cab-beats i.cab-lit { background: var(--cab-ink); }
+.cab-beats i.cab-lit:first-child { background: var(--cab-terra); }
+
+/* ---------- board placeholder ---------- */
+.cab-board-wait {
+  min-height: calc(100dvh - 40px); display: grid; place-content: center; text-align: center; gap: 10px;
+  max-width: 420px; margin: 0 auto;
+}
+.cab-board-kicker { margin: 0; font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cab-terra-deep); font-weight: 700; }
+.cab-board-h { font: 900 36px/1 "Fraunces", Georgia, serif; margin: 0; }
+.cab-board-note { margin: 0 0 8px; color: var(--cab-ink-soft); }
+.cab-fatal { color: var(--cab-terra-deep); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cab-progress span { transition: none; }
+}

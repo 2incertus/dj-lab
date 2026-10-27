@@ -167,3 +167,41 @@ def peaks(src: Path) -> Path:
         finally:
             tmp.unlink(missing_ok=True)
     return out
+
+
+def grid_all(folder: str | None = None) -> dict:
+    """Grid every analyzed track under MAX_TRACK_S that has no usable grid
+    sidecar (optionally only one sources/ folder), one printed line per
+    track. Runs as a background job; a failed track never stops the rest."""
+    aj = rc.ROOT / "analysis.json"
+    entries = json.loads(aj.read_text()) if aj.exists() else []
+    todo, seen = [], set()
+    for e in entries:
+        name = Path(str(e.get("file", ""))).name
+        dur = e.get("duration_s")
+        if not name or name in seen or dur is None or dur > MAX_TRACK_S:
+            continue
+        seen.add(name)
+        src = rc.find_file(name)
+        if not src or (folder and src.parent.name != folder):
+            continue
+        if load_grid(src) is None:
+            todo.append(src)
+    if not todo:
+        print("every track already has a grid", flush=True)
+        return {"gridded": 0, "failed": 0}
+    print(f"{len(todo)} tracks without a grid", flush=True)
+    done = failed = 0
+    for src in todo:
+        try:
+            g = gr.ensure_grid(src)
+        except Exception as e:
+            failed += 1
+            print(f"{src.name}: failed ({e})", flush=True)
+            continue
+        done += 1
+        note = "" if g.get("reliable") else ", unreliable: sync off"
+        print(f"{src.name}: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s{note}",
+              flush=True)
+    print(f"{done} gridded, {failed} failed, {len(todo)} to do", flush=True)
+    return {"gridded": done, "failed": failed}

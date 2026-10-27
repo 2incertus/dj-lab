@@ -1,0 +1,26 @@
+{
+  "_about": "Test-only intake fixtures, served when CABINE_FAKE_INTAKE=1 (A Cabine crate e2e). Never used in production.",
+  "youtube": [
+    {"id": "cabinee2e01", "url": "https://www.youtube.com/watch?v=cabinee2e01",
+     "title": "Cabine E2E Tool 126", "channel": "cabine e2e", "duration": 8, "views": 1200,
+     "too_long": false, "slug": "cabine-e2e__tool-126"},
+    {"id": "cabinee2e02", "url": "https://www.youtube.com/watch?v=cabinee2e02",
+     "title": "Cabine E2E Three Hour Warehouse Set", "channel": "cabine e2e", "duration": 10800,
+     "views": 98000, "too_long": true, "slug": "cabine-e2e__three-hour-set"},
+    {"id": "cabinee2e03", "url": "https://www.youtube.com/watch?v=cabinee2e03",
+     "title": "Cabine E2E Slow Upload", "channel": "cabine e2e", "duration": 9, "views": 7,
+     "too_long": false, "hold": true, "slug": "cabine-e2e__slow-upload"}
+  ],
+  "soundcloud": [
+    {"id": "990001", "url": "https://soundcloud.com/cabine-e2e/tool-126",
+     "title": "Cabine E2E Tool 126", "channel": "cabine e2e", "duration": 8, "views": 340,
+     "source": "soundcloud", "too_long": false, "slug": "cabine-e2e__tool-126"},
+    {"id": "990002", "url": "https://soundcloud.com/cabine-e2e/boiler-room-four-hours",
+     "title": "Cabine E2E Boiler Room Four Hours", "channel": "cabine e2e", "duration": 14400,
+     "views": 51000, "source": "soundcloud", "too_long": true, "slug": "cabine-e2e__four-hours"}
+  ],
+  "spotify": [
+    {"title": "Tool 126", "artist": "Cabine E2E", "album": "Fixtures", "art": null,
+     "duration_ms": 8000}
+  ]
+}

@@ -180,3 +180,108 @@ def proof_page(authed_context, base_url):
     page.wait_for_function("() => window.cabineProof !== undefined")
     yield page
     page.close()
+
+
+# ---- A Cabine crate fixtures (Task 8) ------------------------------------------
+#
+# The crate tests need the dev container started with CABINE_FAKE_INTAKE=1
+# (dev-env.md, "e2e container"): the intake search routes then answer from
+# tests/fixtures/intake_fake.json and a pull writes a short click track.
+
+CRATE_TRACKS = {
+    # name: (bpm, first_beat_s, seconds); crate-a has a grid, nogrid has none
+    "cabine-e2e-crate-a.wav": (125.0, 0.2, 10.0),
+    "cabine-e2e-crate-nogrid.wav": (124.0, 0.15, 8.0),
+}
+CRATE_A_GRID = _grid_for(125.0, 0.2)
+HOLD_MARKER = TECHNO / ".cabine-e2e-hold"
+FAKE_PULLED = ("cabine-e2e__tool-126.wav",)
+
+
+def _fake_intake_on() -> bool:
+    try:
+        env = subprocess.run(["docker", "inspect", "dj-lab-dev", "--format", "{{json .Config.Env}}"],
+                             check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return "CABINE_FAKE_INTAKE=1" in _json.loads(env)
+
+
+def _drop_analysis(names) -> None:
+    aj = ROOT / "analysis.json"
+    if not aj.exists():
+        return
+    entries = _json.loads(aj.read_text())
+    keep = [e for e in entries if Path(str(e.get("file", ""))).name not in names]
+    if len(keep) != len(entries):
+        tmp = aj.with_name(aj.name + ".e2e.tmp")
+        tmp.write_text(_json.dumps(keep, indent=1))
+        tmp.replace(aj)
+
+
+def _clean_fake_pulls() -> None:
+    for name in FAKE_PULLED:
+        for p in (TECHNO / name, TECHNO / (name + ".grid.json")):
+            p.unlink(missing_ok=True)
+        for p in (ROOT / "carry").glob(Path(name).stem + ".*"):
+            p.unlink(missing_ok=True)
+    _drop_analysis(FAKE_PULLED)
+
+
+@pytest.fixture(scope="session")
+def crate_session():
+    """Generate the crate click tracks once and register them in the crate."""
+    if not _fake_intake_on():
+        pytest.fail("the crate e2e tests need dj-lab-dev started with -e CABINE_FAKE_INTAKE=1 "
+                    "(see the e2e container command in dev-env.md)")
+    TECHNO.mkdir(parents=True, exist_ok=True)
+    for name, (bpm, first, secs) in CRATE_TRACKS.items():
+        p = TECHNO / name
+        if not p.exists():
+            _write_clicks(p, bpm, first, secs)
+    aj = ROOT / "analysis.json"
+    entries = _json.loads(aj.read_text()) if aj.exists() else []
+    have = {Path(str(e.get("file", ""))).name for e in entries}
+    new = [{"file": str(TECHNO / n), "duration_s": s, "bpm": b, "beat_cv": 0.0, "key": "A min",
+            "camelot": "8A", "note": "e2e fixture (A Cabine crate tests)"}
+           for n, (b, _f, s) in CRATE_TRACKS.items() if n not in have]
+    if new:
+        tmp = aj.with_name(aj.name + ".e2e.tmp")
+        tmp.write_text(_json.dumps(entries + new, indent=1))
+        tmp.replace(aj)
+    return {"a": "cabine-e2e-crate-a.wav", "nogrid": "cabine-e2e-crate-nogrid.wav",
+            "a_grid": CRATE_A_GRID, "hold": HOLD_MARKER, "techno": TECHNO}
+
+
+@pytest.fixture
+def crate_tracks(crate_session):
+    """Per test: crate-a back to its known grid, nogrid without one, no fake pulls."""
+    HOLD_MARKER.unlink(missing_ok=True)
+    (TECHNO / (crate_session["a"] + ".grid.json")).write_text(_json.dumps(CRATE_A_GRID, indent=2))
+    (TECHNO / (crate_session["nogrid"] + ".grid.json")).unlink(missing_ok=True)
+    _clean_fake_pulls()
+    yield crate_session
+    HOLD_MARKER.unlink(missing_ok=True)
+    (TECHNO / (crate_session["nogrid"] + ".grid.json")).unlink(missing_ok=True)
+    _clean_fake_pulls()
+
+
+@pytest.fixture
+def phone_context(chromium, auth_cookie):
+    """Chromium as a portrait phone: 390 x 844, touch, past the PIN gate."""
+    ctx = chromium.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=3,
+                               is_mobile=True, has_touch=True)
+    ctx.add_cookies([auth_cookie])
+    yield ctx
+    ctx.close()
+
+
+@pytest.fixture
+def crate_page(phone_context, base_url, crate_tracks):
+    """/cabine on the crate screen, the library loaded."""
+    page = phone_context.new_page()
+    page.goto(f"{base_url}/cabine")
+    page.wait_for_function("() => window.cabine && window.cabine.crate")
+    page.evaluate("() => window.cabine.crate.ready")
+    yield page
+    page.close()

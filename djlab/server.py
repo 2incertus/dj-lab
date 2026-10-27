@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from . import analyze as an
 from . import cabine as cab
 from . import grid as gr
+from . import intake_fake
 from . import recipes as rc
 
 app = FastAPI(title="dj-lab")
@@ -514,6 +515,8 @@ def intake_liked():
 @app.get("/api/intake/spotify/search")
 def intake_spotify_search(q: str):
     from . import intake
+    if intake_fake.enabled():
+        return {"tracks": intake_fake.search("spotify", q)}
     try:
         return {"tracks": intake.spotify_search(q)}
     except RuntimeError as e:
@@ -523,12 +526,16 @@ def intake_spotify_search(q: str):
 @app.get("/api/intake/youtube/search")
 def intake_youtube_search(q: str):
     from . import intake
+    if intake_fake.enabled():
+        return {"videos": intake_fake.search("youtube", q)}
     return {"videos": intake.youtube_search(q)}
 
 
 @app.get("/api/intake/soundcloud/search")
 def intake_soundcloud_search(q: str):
     from . import intake
+    if intake_fake.enabled():
+        return {"tracks": intake_fake.search("soundcloud", q)}
     try:
         return {"tracks": intake.soundcloud_search(q)}
     except Exception as e:
@@ -545,9 +552,10 @@ def intake_pull(data: dict):
         raise HTTPException(400, "bad url")
     if folder not in intake.FOLDERS:
         raise HTTPException(400, "bad folder")
+    pull = intake_fake.pull if intake_fake.enabled() else intake.pull
     return {"job": _run_job(
         f"pull from {source}",
-        lambda: intake.pull(url, folder, data.get("name")))}
+        lambda: pull(url, folder, data.get("name")))}
 
 
 _STEM_NAMES = ("vocals", "drums", "bass", "other")
@@ -759,6 +767,22 @@ def cabine_grid(file: str):
 def cabine_grid_run(data: dict):
     src = _cabine_src(data.get("file"))
     return {"job": _run_job(f"beat grid: {src.name}", lambda: gr.ensure_grid(src))}
+
+
+@app.post("/api/cabine/grid/all")
+def cabine_grid_all(data: dict | None = None):
+    """One job that grids every analyzed track (under 15 min) lacking a grid;
+    {"folder": "techno"} limits it to one sources/ folder."""
+    folder = (data or {}).get("folder") or None
+    if folder is not None and (not isinstance(folder, str) or folder not in _intake_folders()):
+        raise HTTPException(400, "bad folder")
+    label = "beat grid: every track" + (f" in {folder}" if folder else "")
+    return {"job": _run_job(label, lambda: cab.grid_all(folder))}
+
+
+def _intake_folders() -> set[str]:
+    from . import intake
+    return intake.FOLDERS
 
 
 @app.post("/api/cabine/grid/fix")
