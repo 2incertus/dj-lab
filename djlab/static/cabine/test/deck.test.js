@@ -1,0 +1,998 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { Deck, TEMPO_RANGES, BEAT_JUMP_PADS, BEAT_LOOP_PADS, DECK_ACTIONS } from "../engine/deck.js";
+import { phaseAt, beatPeriod } from "../engine/grid.js";
+
+// ---- test doubles ---------------------------------------------------------
+
+/** Records every call the deck makes; the test plays the worklet's part by
+ *  calling report(s, t) as the real processor posts {type:"pos", s, t}. */
+class FakeVoice {
+  constructor() {
+    this.calls = [];
+    this.rate = 1;
+    this.immediate = false;
+    this.running = false;
+    this.pos = 0;
+    this.loop = [null, null];
+    this.seeks = [];
+    this._cb = null;
+  }
+  load(pcm) { this.calls.push(["load"]); this.pcm = pcm; this.pos = 0; this.running = false; this.loop = [null, null]; }
+  setRate(r, immediate = false) { this.calls.push(["rate", r, immediate]); this.rate = r; this.immediate = immediate; }
+  seek(s, at) { this.calls.push(["seek", s, at]); this.seeks.push({ s, at }); this.pos = s; }
+  setLoop(a, b, at) { this.calls.push(["loop", a, b, at]); this.loop = [a, b]; this.loopAt = at; }
+  play(at) { this.calls.push(["play", at]); this.running = true; this.playAt = at; }
+  pause() { this.calls.push(["pause"]); this.running = false; }
+  get position() { return this.pos; }
+  onposition(cb) { this._cb = cb; }
+  get underruns() { return 0; }
+  report(s, t) { this.pos = s; this._cb && this._cb(s, t); }
+  lastSeek() { return this.seeks[this.seeks.length - 1]; }
+}
+
+/** Audio clock + timers under test control. */
+function clock() {
+  const c = { t: 0, timers: [] };
+  c.now = () => c.t;
+  c.setTimeout = (fn, ms) => { const id = { at: c.t + ms / 1000, fn }; c.timers.push(id); return id; };
+  c.clearTimeout = (id) => { c.timers = c.timers.filter((x) => x !== id); };
+  c.advance = (s) => {
+    const end = c.t + s;
+    for (;;) {
+      c.timers.sort((a, b) => a.at - b.at);
+      const next = c.timers[0];
+      if (!next || next.at > end + 1e-12) break;
+      c.timers.shift();
+      c.t = Math.max(c.t, next.at);
+      next.fn();
+    }
+    c.t = end;
+  };
+  return c;
+}
+
+const grid = (bpm, first = 0, extra = {}) =>
+  ({ bpm, first_beat_s: first, downbeat_s: first, beat_cv: 0.02, reliable: true, source: "test", fixed: false, ...extra });
+
+const track = (g, dur = 300) => ({
+  pcm: { left: new Int16Array(0), right: new Int16Array(0), sampleRate: 44100 },
+  grid: g,
+  meta: { file: "t.wav", duration_s: dur, bpm: g ? g.bpm : 125 },
+  hotCues: null,
+});
+
+function setup(g = grid(120)) {
+  const c = clock();
+  const v = new FakeVoice();
+  const d = new Deck(v, { now: c.now, setTimeout: c.setTimeout, clearTimeout: c.clearTimeout });
+  d.load(track(g));
+  return { c, v, d };
+}
+
+const timeOfBeatB = (g, n) => g.first_beat_s + n * 60 / g.bpm;
+const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
+const circ = (a, b) => { const d = Math.abs(a - b) % 1; return Math.min(d, 1 - d); };
+
+// ---- transport ------------------------------------------------------------
+
+test("cue_while_paused_sets_point_and_holds_to_preview", () => {
+  const { v, d } = setup(null);                 // no grid: cue lands exactly on the playhead
+  v.report(10.2, 0);
+  d.cueDown();
+  assert.equal(d.state.cuePoint, 10.2);
+  assert.equal(v.running, true, "holding CUE plays from the cue point");
+  assert.equal(d.state.playing, true);
+  d.cueUp();
+  assert.equal(v.running, false);
+  assert.equal(d.state.playing, false);
+  assert.equal(v.lastSeek().s, 10.2, "release returns to the cue point");
+});
+
+test("cue_while_paused_quantizes_to_the_grid", () => {
+  const { v, d } = setup(grid(120));
+  v.report(10.2, 0);
+  d.cueDown();
+  assert.equal(d.state.cuePoint, 10.0);
+  d.cueUp();
+  assert.equal(v.lastSeek().s, 10.0);
+});
+
+test("cue_while_playing_returns_and_pauses", () => {
+  const { c, v, d } = setup(null);
+  v.report(10.2, 0);
+  d.cueDown(); d.cueUp();                      // cue at 10.2
+  d.playPause();
+  c.t = 20;
+  v.report(30, 20);
+  d.cueDown();
+  assert.equal(d.state.playing, false);
+  assert.equal(v.running, false);
+  assert.equal(v.lastSeek().s, 10.2);
+  d.cueUp();
+  assert.equal(v.running, false, "release after Back Cue does nothing");
+});
+
+test("play_pressed_while_cue_held_keeps_playing", () => {
+  const { v, d } = setup(null);
+  v.report(5, 0);
+  d.cueDown();
+  d.playPause();
+  d.cueUp();
+  assert.equal(d.state.playing, true);
+  assert.equal(v.running, true);
+});
+
+test("shift_cue_goes_to_track_start_and_shift_play_does_nothing", () => {
+  const { v, d } = setup();
+  d.playPause();
+  v.report(42, 0);
+  d.shiftCue();
+  assert.equal(v.lastSeek().s, 0);
+  assert.equal(d.state.playing, true);
+  const before = v.calls.length;
+  d.shiftPlayPause();
+  assert.equal(v.calls.length, before, "rekordbox: SHIFT + PLAY/PAUSE has no function");
+  assert.equal(d.state.playing, true);
+});
+
+// ---- tempo -----------------------------------------------------------------
+
+test("tempo_fader_down_is_faster", () => {
+  const { v, d } = setup();
+  assert.equal(d.state.range, 10, "default range +-10");
+  d.setTempo(1);
+  assert.ok(near(v.rate, 1.10), `rate ${v.rate}`);
+  assert.ok(near(d.state.tempoPct, 10));
+  d.setTempo(0.5);
+  assert.ok(near(v.rate, 1.0));
+  d.setTempo(0);
+  assert.ok(near(v.rate, 0.90));
+  assert.ok(near(d.effectiveBpm(), 108));
+});
+
+test("tempo_fine_resolution", () => {
+  const { v, d } = setup();
+  d.cycleRange(); d.cycleRange(); d.cycleRange();       // 10 -> 16 -> WIDE -> 6
+  assert.equal(d.state.range, 6);
+  let prev = null, worst = 0;
+  for (let i = 2400; i <= 2600; i++) {
+    d.setTempo(i / 5000);
+    if (prev !== null) worst = Math.max(worst, Math.abs(v.rate - prev));
+    prev = v.rate;
+  }
+  assert.ok(worst <= 0.0002 && worst > 0, `step ${worst}`);
+});
+
+test("range_cycles_6_10_16_wide", () => {
+  const { v, d } = setup();
+  d.setTempo(1);
+  const seen = [];
+  for (let i = 0; i < 4; i++) { d.cycleRange(); seen.push(d.state.range); }
+  assert.deepEqual(seen, [16, 100, 6, 10]);
+  assert.deepEqual(TEMPO_RANGES, [6, 10, 16, 100]);
+  assert.ok(near(v.rate, 1.10), "slider position kept, tempo follows the range");
+});
+
+// ---- sync ------------------------------------------------------------------
+
+function twoDecks(gA, gB) {
+  const c = clock();
+  const vA = new FakeVoice(), vB = new FakeVoice();
+  const opts = { now: c.now, setTimeout: c.setTimeout, clearTimeout: c.clearTimeout };
+  const A = new Deck(vA, opts), B = new Deck(vB, opts);
+  A.load(track(gA)); B.load(track(gB));
+  return { c, vA, vB, A, B };
+}
+
+test("sync_matches_bpm_and_phase", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause(); B.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);           // deck A at phase 0.25
+  vA.report(sA, 3);
+  vB.report(5.0, 3);
+  assert.ok(near(phaseAt(gA, A.posAt(3)), 0.25));
+  B.syncPress(A);
+  assert.equal(B.state.syncOn, true);
+  assert.ok(near(B.effectiveBpm(), 128), `bpm ${B.effectiveBpm()}`);
+  assert.ok(near(vB.rate, 128 / 131));
+  const { s, at } = vB.lastSeek();
+  assert.ok(at > 3, "the phase jump is scheduled ahead on the audio clock");
+  const aAt = sA + (at - 3) * 1.0;             // where A is at that moment, independently
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.ok(Math.abs(s - (5.0 + (at - 3) * 128 / 131)) <= beatPeriod(gB) / 2 + 1e-9, "never jumps more than half a beat");
+});
+
+test("synced_play_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);           // master at phase 0.25
+  vA.report(sA, 3);
+  vB.report(5.0, 3);                           // B paused at its cue
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.playPause();
+  const after = vB.calls.slice(n);
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1];
+  assert.ok(at > 3, "start is scheduled, never 'now': nothing plays before the aligned seek");
+  assert.equal(seeks[0][2], at, "seek and start land on the same audio-clock time");
+  const idxSeek = after.indexOf(seeks[0]), idxPlay = after.indexOf(plays[0]);
+  assert.ok(idxSeek < idxPlay, "the seek is queued before the start");
+  const s = seeks[0][1];
+  const aAt = sA + (at - 3);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.ok(Math.abs(s - 5.0) <= beatPeriod(gB) / 2 + 1e-9, "cue shifted by at most half a beat");
+  assert.ok(near(B.posAt(at), s), "the deck's own model agrees");
+  assert.ok(near(B.posAt(at + 1), s + 128 / 131));
+});
+
+/** The synced-start checks shared by PLAY, hot cue and CUE from pause:
+ *  one seek and one start on the same scheduled frame, in phase with A. */
+function assertAlignedStart(after, gA, gB, sA, t0, from) {
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1];
+  assert.ok(at > t0, "start is scheduled, never 'now': nothing plays before the aligned seek");
+  assert.equal(seeks[0][2], at, "seek and start land on the same audio-clock time");
+  assert.ok(after.indexOf(seeks[0]) < after.indexOf(plays[0]), "the seek is queued before the start");
+  const s = seeks[0][1];
+  const aAt = sA + (at - t0);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.ok(Math.abs(s - from) <= beatPeriod(gB) / 2 + 1e-9, "shifted by at most half a beat");
+  return { s, at };
+}
+
+test("synced_hot_cue_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);           // master at phase 0.25
+  vA.report(sA, 3);
+  vB.report(40.0, 3);                          // B paused somewhere else
+  B.state.hotCues[0] = { start: 5.0, end: null };
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.hotCue(0);
+  const { s, at } = assertAlignedStart(vB.calls.slice(n), gA, gB, sA, 3, 5.0);
+  assert.equal(B.state.playing, true);
+  assert.ok(near(B.posAt(at), s), "the deck's own model agrees");
+  assert.ok(near(B.posAt(at + 1), s + 128 / 131));
+  vB.report(40.0, 3.01);                       // a report from before the start is ignored
+  assert.ok(near(B.posAt(at), s));
+});
+
+test("synced_loop_hot_cue_from_pause_starts_aligned_inside_the_loop", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.75 * beatPeriod(gA);           // phase 0.75: the nearest aligned beat is before IN
+  vA.report(sA, 3);
+  vB.report(40.0, 3);
+  const pB = beatPeriod(gB);
+  const inS = timeOfBeatB(gB, 20), outS = inS + 4 * pB;
+  B.state.hotCues[1] = { start: inS, end: outS };
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.hotCue(1);
+  const after = vB.calls.slice(n);
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1], s = seeks[0][1];
+  assert.ok(at > 3 && seeks[0][2] === at, "seek and start on one scheduled frame");
+  assert.ok(s >= inS && s < outS, `start ${s} inside the loop [${inS}, ${outS})`);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, sA + (at - 3))) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.deepEqual(vB.loop, [inS, outS]);
+  assert.equal(B.state.loop.active, true);
+});
+
+test("synced_cue_preview_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);
+  vA.report(sA, 3);
+  vB.report(5.0, 3);
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.cueDown();                                 // Cue Point Sampler on a synced deck
+  const cue = B.state.cuePoint;
+  assertAlignedStart(vB.calls.slice(n), gA, gB, sA, 3, cue);
+  c.t = 4;
+  B.cueUp();                                   // release: back to the cue point itself
+  assert.equal(vB.lastSeek().s, cue);
+  assert.equal(B.state.playing, false);
+});
+
+test("unsynced_play_from_pause_starts_now", () => {
+  const { v, d } = setup();
+  d.playPause();
+  const p = v.calls.filter((x) => x[0] === "play");
+  assert.equal(p.length, 1);
+  assert.equal(p[0][1], undefined, "play() with no time = now");
+});
+
+test("sync_follows_master_tempo_and_cancels", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  B.syncPress(A);
+  A.setTempo(1);                                // A to 128 * 1.10
+  assert.ok(near(B.effectiveBpm(), 140.8), `follows: ${B.effectiveBpm()}`);
+  B.setTempo(0.2);                             // slider on a synced deck is ignored
+  assert.ok(near(B.effectiveBpm(), 140.8));
+  B.syncPress(A);                              // cancel
+  assert.equal(B.state.syncOn, false);
+  assert.ok(near(B.effectiveBpm(), 140.8), "cancel keeps the synced tempo");
+  B.setTempo(0.9);                             // 1.08 crosses the held 140.8 / 131 = 1.0748
+  B.setTempo(0.5);
+  assert.ok(near(vB.rate, 1.0), "slider takes over again");
+  A.setTempo(0.5);
+  assert.ok(near(vB.rate, 1.0), "no longer follows");
+});
+
+test("held_rate_survives_lit_master_on_off", () => {
+  const { vA, vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  A.syncPress(B);                              // A follows B: 131 / 128
+  A.syncPress(B);                              // off: A holds 1.0234
+  const held = 131 / 128;
+  assert.ok(near(vA.rate, held));
+  B.syncPress(A);                              // B follows A (A still on its held rate)
+  assert.ok(near(B.effectiveBpm(), 131));
+  A.syncPress(B);                              // SYNC on the master: lights
+  A.syncPress(B);                              // and off again
+  assert.equal(A.state.syncOn, false);
+  assert.ok(near(A._heldRate, held), `held rate lost: ${A._heldRate}`);
+  assert.ok(near(A.effectiveBpm(), 131), `model and voice disagree: ${A.effectiveBpm()} vs ${vA.rate * 128}`);
+  A.setTempo(0.5001);                          // a tiny slider touch far from the held rate
+  assert.ok(near(vA.rate, held), `A jumped to ${vA.rate}`);
+  assert.ok(near(vB.rate, 1.0), `B jumped to ${vB.rate}`);
+});
+
+test("tempo_slider_takes_over_at_the_end_stop_when_the_held_rate_is_out_of_range", () => {
+  const { vA, A, B } = twoDecks(grid(120), grid(140));
+  A.playPause(); B.playPause();
+  A.syncPress(B);                              // 140 / 120 = 1.1667: beyond +-10
+  A.syncPress(B);
+  const held = 140 / 120;
+  for (const f of [0.5, 0.8, 0.99, 0.3, 0.999]) {
+    A.setTempo(f);
+    assert.ok(near(vA.rate, held), `slider at ${f} must not move the tempo (${vA.rate})`);
+  }
+  A.setTempo(1);                               // the end stop nearest the held rate
+  assert.ok(near(vA.rate, 1.10), `takeover at the stop: ${vA.rate}`);
+  A.setTempo(0.5);
+  assert.ok(near(vA.rate, 1.0), "the slider drives from now on");
+  // below the range: the top (slow) stop takes over
+  const { vA: v2, A: A2, B: B2 } = twoDecks(grid(140), grid(120));
+  A2.playPause(); B2.playPause();
+  A2.syncPress(B2); A2.syncPress(B2);          // holds 0.857
+  A2.setTempo(0.01);
+  assert.ok(near(v2.rate, 120 / 140), `ignored near the stop: ${v2.rate}`);
+  A2.setTempo(0);
+  assert.ok(near(v2.rate, 0.90), `takeover at the top stop: ${v2.rate}`);
+});
+
+test("sync_on_the_master_keeps_the_follower_synced", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  B.syncPress(A);                              // B follows A
+  A.syncPress(B);                              // SYNC on the master: its light comes on, roles stay
+  assert.equal(A.state.syncOn, true, "A's SYNC lights");
+  assert.equal(B.state.syncOn, true, "B is still synced");
+  assert.equal(B._master, A, "B still follows A");
+  assert.equal(A._master, null, "A follows nobody");
+  A.setTempo(1);                               // A's slider still drives both
+  assert.ok(near(A.effectiveBpm(), 140.8), `A ${A.effectiveBpm()}`);
+  assert.ok(near(B.effectiveBpm(), 140.8), `B follows: ${B.effectiveBpm()}`);
+  B.setTempo(0.1);                             // B's slider stays dead
+  assert.ok(near(B.effectiveBpm(), 140.8));
+  A.syncPress(B);                              // second press: only A's light goes off
+  assert.equal(A.state.syncOn, false);
+  assert.equal(B.state.syncOn, true);
+  A.setTempo(0.5);
+  assert.ok(near(A.effectiveBpm(), 128), "A's slider is live, no held rate on the master");
+  assert.ok(near(B.effectiveBpm(), 128), "B still follows A");
+  assert.ok(near(vB.rate, 128 / 131));
+});
+
+test("tempo_slider_takes_over_only_when_it_crosses_the_held_rate", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  B.setTempo(0.5);
+  B.syncPress(A);
+  A.setTempo(0.75);                            // A at 128 * 1.05 = 134.4
+  const held = 134.4 / 131;                    // 1.02595 on B
+  B.syncPress(A);                              // unsync: B holds the synced rate
+  assert.ok(near(vB.rate, held), `held ${vB.rate}`);
+  for (const f of [0.52, 0.55, 0.6, 0.62]) {   // slider rates 1.004 .. 1.024: below the held rate
+    B.setTempo(f);
+    assert.ok(near(vB.rate, held), `slider at ${f} must not move the tempo (${vB.rate})`);
+    assert.ok(near(B.effectiveBpm(), 134.4));
+  }
+  B.setTempo(0.4);                             // moving away does nothing either
+  assert.ok(near(vB.rate, held));
+  B.setTempo(0.63);                            // 1.026: crosses 1.02595, takes over
+  assert.ok(near(vB.rate, 1.026), `takeover at the slider value: ${vB.rate}`);
+  assert.ok(Math.abs(vB.rate - held) < 0.0002, "no jump at the takeover");
+  B.setTempo(0.6);
+  assert.ok(near(vB.rate, 1.02), "the slider drives from now on");
+  // crossing from above
+  B.syncPress(A);
+  A.setTempo(0.25);                            // A at 128 * 0.95 = 121.6
+  B.syncPress(A);
+  const held2 = 121.6 / 131;
+  B.setTempo(0.5);                             // 1.0: still above 0.928
+  assert.ok(near(vB.rate, held2));
+  B.setTempo(0.1);                             // 0.92: crossed
+  assert.ok(near(vB.rate, 0.92));
+});
+
+test("deck_no_grid_disables_sync", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131, 0, { reliable: false }));
+  assert.equal(B.state.noGrid, true);
+  assert.equal(A.state.noGrid, false);
+  A.playPause(); B.playPause();
+  const n = vB.calls.length;
+  B.syncPress(A);
+  assert.equal(B.state.syncOn, false);
+  assert.equal(vB.calls.length, n, "no rate change, no seek");
+  // and the other way round: a reliable deck cannot sync to a gridless one
+  const t2 = twoDecks(grid(128), null);
+  t2.A.syncPress(t2.B);
+  assert.equal(t2.A.state.syncOn, false);
+  assert.equal(t2.B.state.noGrid, true);
+});
+
+test("load_turns_sync_off", () => {
+  const { A, B } = twoDecks(grid(128), grid(131));
+  B.syncPress(A);
+  assert.equal(B.state.syncOn, true);
+  B.load(track(grid(125)));
+  assert.equal(B.state.syncOn, false);
+});
+
+// ---- loops -----------------------------------------------------------------
+
+test("four_beat_loop_and_exit", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.fourBeatExit();
+  assert.deepEqual([d.state.loop.in, d.state.loop.out, d.state.loop.active], [10.0, 12.0, true]);
+  assert.deepEqual(v.loop, [10.0, 12.0]);
+  d.fourBeatExit();
+  assert.equal(d.state.loop.active, false);
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(d.state.playing, true, "exit keeps playing");
+});
+
+test("four_beat_loop_pressed_just_before_the_beat_starts_on_that_beat", () => {
+  const { c, v, d } = setup(grid(120));        // beats every 0.5 s: beat 4 at 2.0
+  d.playPause();
+  c.t = 1; v.report(1.96, 1);                  // 40 ms before beat 4
+  d.fourBeatExit();
+  assert.deepEqual([d.state.loop.in, d.state.loop.out], [2.0, 4.0], "IN on the nearest beat");
+  assert.deepEqual(v.loop, [2.0, 4.0]);
+  assert.ok(near(d.posAt(1.1), 2.06), "playback runs into the loop, no jump");
+  d.fourBeatExit();
+  c.t = 2; v.report(2.04, 2);                  // 40 ms after beat 4
+  d.fourBeatExit();
+  assert.deepEqual([d.state.loop.in, d.state.loop.out], [2.0, 4.0]);
+});
+
+test("beat_loop_pads_start_on_the_nearest_beat", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.t = 1; v.report(1.96, 1);
+  d.beatLoop(3);                               // 2 beats
+  assert.deepEqual(v.loop, [2.0, 3.0]);
+  d.beatLoop(3);
+  c.t = 2; v.report(2.04, 2);
+  d.beatLoop(4);                               // 4 beats
+  assert.deepEqual(v.loop, [2.0, 4.0]);
+  d.beatLoop(4);
+  c.t = 3; v.report(2.11, 3);                  // 1/4 beat pad: nearest quarter (2.125)
+  d.beatLoop(0);
+  assert.deepEqual(v.loop, [2.125, 2.25]);
+});
+
+test("halve_double_only_with_loop", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.loopHalve(); d.loopDouble();
+  assert.equal(d.state.loop.active, false);
+  assert.deepEqual(v.loop, [null, null]);
+  d.fourBeatExit();
+  d.loopHalve();
+  assert.deepEqual(v.loop, [10.0, 11.0]);
+  d.loopDouble(); d.loopDouble();
+  assert.deepEqual(v.loop, [10.0, 14.0]);
+  assert.equal(d.state.loop.out, 14.0);
+});
+
+test("halving_past_the_playhead_wraps_inside_the_new_loop", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.fourBeatExit();                            // 10..12
+  c.t = 1.5;
+  v.report(11.6, 1.5);
+  d.loopHalve();                               // 10..11, playhead at 11.6 -> 10.6
+  assert.deepEqual(v.loop, [10.0, 11.0]);
+  assert.ok(near(v.lastSeek().s, 10.6), `seek ${v.lastSeek().s}`);
+});
+
+test("manual_loop_in_out_and_adjust", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(20.04, 0);
+  d.loopIn();
+  assert.equal(d.state.loop.in, 20.0);
+  assert.equal(d.state.loop.active, false);
+  c.t = 3; v.report(23.03, 3);
+  d.loopOut();
+  assert.deepEqual(v.loop, [20.0, 23.0]);
+  assert.equal(d.state.loop.active, true);
+  d.loopIn();                                  // during loop playback: adjust IN with the jog
+  assert.equal(d.state.loop.adjust, "in");
+  d.jogTurn(72);                               // 72 deg = 0.2 turn = 0.1 s
+  assert.ok(near(v.loop[0], 20.1), `in ${v.loop[0]}`);
+  d.loopIn();
+  assert.equal(d.state.loop.adjust, null);
+});
+
+test("beat_loop_pads_and_same_pad_cancels", () => {
+  const { v, d } = setup(grid(120));
+  assert.deepEqual(BEAT_LOOP_PADS, [0.25, 0.5, 1, 2, 4, 8, 16, 32]);
+  d.playPause();
+  v.report(10.3, 0);
+  d.beatLoop(0);                                // 1/4 beat loop from the quarter at/below 10.3
+  assert.deepEqual(v.loop, [10.25, 10.375]);
+  d.beatLoop(5);                                // 8 beats, same in point
+  assert.deepEqual(v.loop, [10.25, 14.25]);
+  d.beatLoop(5);
+  assert.equal(d.state.loop.active, false);
+  assert.deepEqual(v.loop, [null, null]);
+});
+
+test("shift_four_beat_arms_the_nearest_saved_loop", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.fourBeatExit();
+  d.hotCue(2);                                 // saves loop 10..12 on pad C
+  assert.deepEqual(d.state.hotCues[2], { start: 10.0, end: 12.0 });
+  d.fourBeatExit();
+  c.t = 1; v.report(30, 1);
+  const n = v.seeks.length;
+  d.shiftFourBeatExit();
+  assert.equal(d.state.activeLoop, 2);
+  assert.deepEqual(v.loop, [10.0, 12.0]);
+  assert.equal(v.seeks.length, n, "arming does not move the playhead");
+  d.shiftFourBeatExit();
+  assert.equal(d.state.activeLoop, null);
+  assert.deepEqual(v.loop, [null, null]);
+});
+
+// ---- hot cues and beat jump -------------------------------------------------
+
+test("sub_beat_loop_hot_cue_called_while_playing_engages_and_wraps", () => {
+  const { c, v, d } = setup(grid(120));        // a beat = 0.5 s
+  d.state.hotCues[2] = { start: 10.0, end: 10.125 };   // a 1/4-beat loop hot cue
+  d.playPause();
+  c.t = 2; v.report(30.3, 2);                  // phase 0.6 at the press
+  d.hotCue(2);
+  assert.equal(d.state.loop.active, true);
+  assert.deepEqual(v.loop, [10.0, 10.125]);
+  const { s, at } = v.lastSeek();
+  assert.ok(s >= 10.0 && s < 10.125, `lands inside the loop: ${s}`);
+  for (const dt of [0.05, 0.2, 1, 3.7]) {
+    const p = d.posAt(at + dt);
+    assert.ok(p >= 10.0 && p < 10.125, `still looping ${dt} s later: ${p}`);
+  }
+});
+
+test("hotcue_set_jump_clear", () => {
+  const { c, v, d } = setup(grid(120));
+  v.report(20.2, 0);
+  d.hotCue(0);
+  assert.deepEqual(d.state.hotCues[0], { start: 20.0, end: null });
+  assert.equal(v.running, false, "setting does not play");
+  v.report(40, 0);
+  d.hotCue(0);                                 // paused: playback starts from the hot cue
+  assert.equal(v.lastSeek().s, 20.0);
+  assert.equal(d.state.playing, true);
+  assert.equal(v.running, true);
+  c.t = 2; v.report(41.1, 2);
+  d.hotCue(0);                                 // playing + quantize: keep the beat phase
+  const { s, at } = v.lastSeek();
+  const posAtJump = 41.1 + (at - 2);
+  assert.ok(near(phaseAt(grid(120), s), phaseAt(grid(120), posAtJump), 1e-9));
+  assert.ok(s >= 20.0 && s < 20.5);
+  d.shiftHotCue(0);
+  assert.equal(d.state.hotCues[0], null);
+  d.shiftHotCue(0);                            // clearing an empty pad is harmless
+  assert.equal(d.state.hotCues[0], null);
+});
+
+test("hotcues_come_from_the_track", () => {
+  const { d } = setup();
+  const t = track(grid(120));
+  t.hotCues = [{ start: 1, end: null }, null, { start: 3, end: 5 }];
+  d.load(t);
+  assert.equal(d.state.hotCues.length, 8);
+  assert.deepEqual(d.state.hotCues[2], { start: 3, end: 5 });
+  assert.equal(d.state.hotCues[7], null);
+});
+
+test("beat_jump_keeps_phase", () => {
+  const { c, v, d } = setup(grid(120));
+  assert.deepEqual(BEAT_JUMP_PADS, [-1, 1, -2, 2, -4, 4, -8, 8]);
+  d.playPause();
+  c.t = 1; v.report(10.1, 1);
+  d.beatJump(5);                               // +4 beats
+  let { s, at } = v.lastSeek();
+  assert.ok(near(s - (10.1 + (at - 1)), 2.0), `moved ${s - (10.1 + (at - 1))}`);
+  c.t = 2; v.report(30.3, 2);
+  d.beatJump(4);                               // -4 beats
+  ({ s, at } = v.lastSeek());
+  assert.ok(near(s - (30.3 + (at - 2)), -2.0));
+  c.t = 3;
+  d.playPause();                               // paused: immediate, exact
+  v.report(50.0, 3);
+  d.beatJump(1);
+  assert.ok(near(v.lastSeek().s, 50.5));
+});
+
+test("shift_beat_jump_pads_7_8_scale_the_jump", () => {
+  const { v, d } = setup(grid(120));
+  v.report(50, 0);
+  d.shiftBeatJump(7);                          // up: 2, 4, 8, 16
+  d.beatJump(1);
+  assert.ok(near(v.lastSeek().s, 51.0));
+  d.shiftBeatJump(6); d.shiftBeatJump(6);      // down twice: 1/2 ...
+  v.report(50, 0);
+  d.beatJump(1);
+  assert.ok(near(v.lastSeek().s, 50.25));
+  for (let i = 0; i < 10; i++) d.shiftBeatJump(7);
+  v.report(50, 0);
+  d.beatJump(7);                               // capped at 64 beats
+  assert.ok(near(v.lastSeek().s, 50 + 64 * 0.5));
+});
+
+// ---- jog -------------------------------------------------------------------
+
+test("jog_touch_scrubs_and_release_restores_rate", () => {
+  const { c, v, d } = setup(grid(120));
+  d.setTempo(1);                               // 1.10
+  d.playPause();
+  v.report(10, 0);
+  d.jogTouch(true);
+  assert.equal(v.rate, 0, "touching the platter holds the record");
+  assert.equal(v.immediate, true);
+  c.advance(0.01);
+  d.jogTurn(36);                               // 0.1 turn = 0.18 s forward
+  assert.ok(v.rate > 0 && v.immediate, `scratch rate ${v.rate}`);
+  c.advance(0.01);
+  d.jogTurn(-72);
+  assert.ok(v.rate < 0, "backward");
+  c.advance(1.0);                              // finger still, record catches up and stops
+  assert.equal(v.rate, 0);
+  d.jogTouch(false);
+  assert.ok(near(v.rate, 1.10), `release rate ${v.rate}`);
+  assert.equal(v.running, true);
+  assert.equal(d.state.playing, true);
+});
+
+test("jog_scrub_while_paused_stays_paused", () => {
+  const { c, v, d } = setup(grid(120));
+  v.report(10, 0);
+  d.jogTouch(true);
+  assert.equal(v.running, true, "scrubbing runs the voice");
+  d.jogTurn(-36);
+  assert.ok(v.rate < 0);
+  c.advance(0.5);
+  d.jogTouch(false);
+  assert.equal(v.running, false);
+  assert.equal(d.state.playing, false);
+});
+
+test("jog_ring_nudges_only_while_turning", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.advance(0.1);
+  d.jogRing(20);
+  assert.ok(v.rate > 1.0, `bend up ${v.rate}`);
+  assert.ok(v.rate < 1.31);
+  c.advance(0.2);
+  assert.ok(near(v.rate, 1.0), `released ${v.rate}`);
+  d.jogRing(-20);
+  assert.ok(v.rate < 1.0);
+  c.advance(0.2);
+  assert.ok(near(v.rate, 1.0));
+});
+
+test("slow_ring_drag_bends_continuously", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.advance(1);
+  const rates = [];
+  for (let e = 0; e < 12; e++) {               // a slow steady drag: 9 deg every 90 ms
+    d.jogRing(9);
+    for (let k = 0; k < 9; k++) { c.advance(0.01); rates.push(v.rate); }
+  }
+  const steady = rates.slice(27);              // after the first few events
+  assert.ok(steady.every((r) => r > 1.0), `the bend dropped to zero between events: ${Math.min(...steady)}`);
+  const lo = Math.min(...steady), hi = Math.max(...steady);
+  assert.ok(hi - lo < 0.2 * (hi - 1), `warble: bend between ${lo} and ${hi}`);
+  c.advance(0.2);
+  assert.ok(near(v.rate, 1.0), `released ${v.rate}`);
+});
+
+test("shift_jog_top_is_fast_search", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10, 0);
+  d.setShift(true);
+  d.jogTurn(360);                              // one turn = 1.8 s x 16
+  assert.ok(near(v.lastSeek().s, 10 + 1.8 * 16), `search ${v.lastSeek().s}`);
+  d.setShift(false);
+  assert.equal(d.state.shift, false);
+});
+
+test("backward_scratch_wraps_across_loop_in", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.t = 1; v.report(10.1, 1);
+  d.fourBeatExit();                            // loop 10 .. 12
+  d.jogTouch(true);
+  d.jogTurn(-72);                              // target 0.36 s back: the record runs backwards fast
+  assert.ok(v.rate < 0, `rate ${v.rate}`);
+  const r = v.rate;
+  c.t = 1.01;                                  // no timer fires: one 10 ms step on the anchor
+  const want = 12 - (10 - (10.1 + 0.01 * r));  // the worklet wraps at IN back to OUT
+  assert.ok(near(d.posAt(), want, 1e-9), `posAt ${d.posAt()}, want ${want}`);
+});
+
+test("sync_alignment_stays_inside_the_followers_loop", () => {
+  const gA = grid(120, 0), gB = grid(120, 0);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause(); B.playPause();
+  vB.report(10.1, 0);
+  B.fourBeatExit();                            // B loops 10 .. 12
+  c.t = 3;
+  vA.report(10.125, 3);                        // A at phase 0.25
+  vB.report(11.9, 3);                          // B near its loop OUT
+  B.syncPress(A);
+  const { s, at } = vB.lastSeek();
+  assert.ok(s >= 10 && s < 12, `aligned target ${s} is outside the loop [10, 12)`);
+  const aAt = 10.125 + (at - 3);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+});
+
+// ---- roll (Beat FX "Roll", ruling R3) ---------------------------------------
+
+test("roll_slips_back_to_where_playback_would_have_been", () => {
+  const { c, v, d } = setup(grid(120));         // 0.5 s per beat
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);                                    // 1 beat from the beat at/below 10.1
+  assert.deepEqual(v.loop, [10.0, 10.5]);
+  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  assert.equal(d.state.loop.active, true);
+  c.advance(0.7);                               // 10.1 + 0.7 = 10.8 -> wraps to 10.3
+  assert.ok(near(d.posAt(), 10.3, 1e-9), `rolling at ${d.posAt()}`);
+  c.advance(1.25 - 0.7);                        // held 2.5 beats in all
+  const before = v.seeks.length;
+  d.roll(null);
+  assert.equal(v.seeks.length, before + 1, "one jump back to the slip position");
+  assert.ok(Math.abs(d.posAt() - (10.1 + 2.5 * 0.5)) < 0.001,
+    `slip landed at ${d.posAt()}, want ${10.1 + 1.25}`);
+  const s = v.lastSeek();
+  assert.ok(s.at > c.t, "the return is scheduled on the audio clock");
+  assert.ok(Math.abs(s.s - (10.1 + (s.at - 0))) < 1e-9, "seek lands where play would be at that frame");
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(v.loopAt, s.at, "the roll loop is released on the same frame as the jump");
+  assert.equal(d.state.roll, null);
+  assert.equal(d.state.loop.active, false);
+  assert.equal(d.state.playing, true);
+});
+
+test("roll_with_no_reliable_grid_is_a_noop", () => {
+  const { v, d } = setup(grid(120, 0, { reliable: false }));
+  d.playPause();
+  v.report(10.1, 0);
+  const n = v.calls.length;
+  d.roll(1);
+  assert.equal(d.state.roll, null);
+  assert.equal(d.state.loop.active, false);
+  assert.equal(v.calls.length, n, "no loop, no seek");
+  d.roll(null);
+  assert.equal(v.calls.length, n);
+});
+
+test("roll_on_a_paused_deck_is_a_noop", () => {
+  const { v, d } = setup(grid(120));
+  v.report(10.1, 0);
+  d.roll(1);
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  d.playPause();
+  assert.equal(d.state.roll, null, "the deck keeps no memory of an earlier roll()");
+});
+
+test("onstart_fires_on_every_play_start_and_pauses_end_the_roll", () => {
+  const { c, v, d } = setup(grid(120));
+  const starts = [];
+  d.onstart((deck) => { starts.push(deck.state.playing); deck.roll(1); });   // a Beat FX stand-in
+  v.report(10.1, 0);
+  d.playPause();                                // PLAY
+  assert.deepEqual(starts, [true]);
+  assert.deepEqual(d.state.roll, { beats: 1, in: 10.0, out: 10.5 });
+  d.playPause();                                // pause: the roll ends where it is
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  assert.equal(starts.length, 1, "no start on pause");
+  d.hotCue(0);                                  // sets A (paused: no start)
+  assert.equal(starts.length, 1);
+  d.hotCue(0);                                  // lit pad from pause: playback starts
+  assert.equal(starts.length, 2);
+  assert.notEqual(d.state.roll, null);
+  c.t = 1;
+  d.cueDown();                                  // Back Cue: paused, roll over, loop released
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  d.cueUp();
+  d.cueDown();                                  // Cue Point Sampler plays while held
+  assert.equal(starts.length, 3);
+  d.cueUp();                                    // release: back to the cue, no loop left
+  assert.equal(d.state.roll, null);
+  assert.deepEqual(v.loop, [null, null]);
+  d.playPause();
+  d.jogTouch(true);
+  d.jogTouch(false);                            // let go while playing: a start
+  assert.equal(starts.length, 5);
+  d.playPause();
+  d.jogTouch(true);
+  d.jogTouch(false);                            // let go while paused: no start
+  assert.equal(starts.length, 5);
+});
+
+test("roll_length_change_keeps_the_slip", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.3, 0);
+  d.roll(0.25);                                 // quarter at/below 10.3: 10.25 .. 10.375
+  assert.deepEqual(v.loop, [10.25, 10.375]);
+  c.advance(0.4);
+  d.roll(2);                                    // longer roll, same in point
+  assert.deepEqual(v.loop, [10.25, 11.25]);
+  c.advance(0.6);
+  d.roll(null);
+  assert.ok(Math.abs(d.posAt() - 11.3) < 0.001, `slip ${d.posAt()}`);
+});
+
+test("roll_three_quarters_snaps_to_the_quarter", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.3, 0);
+  d.roll(0.75);
+  assert.deepEqual(v.loop, [10.25, 10.625]);
+});
+
+test("roll_over_an_active_loop_restores_it", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.fourBeatExit();                             // loop 10 .. 12
+  d.roll(0.5);                                  // 10.0 .. 10.25
+  assert.deepEqual(v.loop, [10.0, 10.25]);
+  c.advance(2.0);                               // without the roll: 10.1 + 2.0 = 12.1 -> 10.1
+  d.roll(null);
+  assert.deepEqual(v.loop, [10.0, 12.0], "the 4-beat loop is back");
+  assert.equal(d.state.loop.active, true);
+  assert.equal(d.state.loop.beats, 4);
+  assert.ok(Math.abs(d.posAt() - 10.1) < 0.001, `slip inside the old loop ${d.posAt()}`);
+});
+
+test("roll_slip_follows_a_tempo_change", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  c.advance(0.5);
+  d.setTempo(1);                                // +10 %
+  c.advance(0.5);
+  d.roll(null);
+  assert.ok(Math.abs(d.posAt() - (10.1 + 0.5 + 0.55)) < 0.001, `slip ${d.posAt()}`);
+});
+
+test("another_loop_action_takes_over_from_a_roll", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  d.fourBeatExit();                             // exits the loop: no slip any more
+  assert.equal(d.state.roll, null);
+  const n = v.seeks.length;
+  d.roll(null);
+  assert.equal(v.seeks.length, n, "ending a dropped roll does nothing");
+});
+
+test("load_clears_a_roll", () => {
+  const { v, d } = setup(grid(120));
+  d.playPause();
+  v.report(10.1, 0);
+  d.roll(1);
+  d.load(track(grid(125)));
+  assert.equal(d.state.roll, null);
+});
+
+// ---- contract -------------------------------------------------------------
+
+test("every control-map action is a Deck method", () => {
+  for (const name of DECK_ACTIONS) {
+    assert.equal(typeof Deck.prototype[name], "function", name);
+  }
+  for (const name of ["playPause", "shiftPlayPause", "cueDown", "cueUp", "shiftCue", "jogTouch",
+    "jogTurn", "jogRing", "setTempo", "cycleRange", "syncPress", "loopIn", "loopOut",
+    "fourBeatExit", "shiftFourBeatExit", "loopHalve", "loopDouble", "hotCue", "shiftHotCue",
+    "beatJump", "beatLoop", "effectiveBpm", "load", "roll"]) {
+    assert.ok(DECK_ACTIONS.includes(name), name);
+  }
+});
+
+test("nothing happens on an empty deck", () => {
+  const c = clock();
+  const v = new FakeVoice();
+  const d = new Deck(v, { now: c.now, setTimeout: c.setTimeout, clearTimeout: c.clearTimeout });
+  for (const name of DECK_ACTIONS) {
+    if (name === "load" || name === "effectiveBpm") continue;
+    d[name](0);
+  }
+  assert.equal(v.calls.length, 0);
+  assert.equal(d.state.loaded, false);
+});
+
+// ---- Task 10: unload before a swap -----------------------------------------------
+
+test("unload_empties_the_voice_and_the_deck", () => {
+  const { A, B, vA } = twoDecks(grid(128), grid(131));
+  B.syncPress(A);                                  // B follows A
+  A.state.hotCues[0] = { start: 1, end: null };
+  A.playPause();
+  vA.unloads = 0;
+  vA.unload = () => { vA.unloads++; vA.calls.push(["unload"]); };
+  A.unload();
+  assert.equal(vA.unloads, 1, "the worklet drops its PCM");
+  assert.equal(A.state.loaded, false);
+  assert.equal(A.state.playing, false);
+  assert.equal(A.track, null);
+  assert.deepEqual(A.state.hotCues, new Array(8).fill(null));
+  assert.equal(B.state.syncOn, false, "the follower lets go of an unloaded master");
+  assert.equal(A.effectiveBpm(), null);
+  A.playPause();
+  assert.equal(A.state.playing, false, "nothing to play");
+});

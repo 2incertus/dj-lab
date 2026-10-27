@@ -1,4 +1,4 @@
-"""Crate intake: pull material from Spotify and YouTube into sources/.
+"""Crate intake: pull material from Spotify, YouTube and SoundCloud into sources/.
 
 Spotify goes through the taste engine's HTTP API -- the OAuth tokens
 live in taste's DB and dj-lab never touches credentials; it asks the
@@ -7,6 +7,10 @@ so a Spotify pick is resolved to a YouTube upload the user explicitly
 chooses (never silently substituted), then yt-dlp grabs the audio and
 the analyzer + pairing engine run on it so the new track lands in the
 crate already scored against all seven frames.
+
+A Cabine adds SoundCloud search, the `techno` folder, a 15 minute cap
+(longer is a set, not a track: flagged at search, refused at pull) and a
+beat grid computed for every pulled track.
 """
 
 import json
@@ -17,11 +21,36 @@ from pathlib import Path
 import httpx
 
 from . import analyze as an
+from . import grid as gr
 from . import recipes as rc
 
 TASTE_URL = os.getenv("TASTE_URL", "http://host.docker.internal:8930").rstrip("/")
 
-FOLDERS = {"cosmic", "rhythmic", "lush", "percussion"}
+FOLDERS = {"cosmic", "rhythmic", "lush", "percussion", "techno"}
+
+# the only URLs pull() accepts (the server checks the same list)
+YOUTUBE_PREFIX = "https://www.youtube.com/watch?v="
+SOUNDCLOUD_PREFIXES = ("https://soundcloud.com/", "https://api.soundcloud.com/tracks/")
+PULL_PREFIXES = (YOUTUBE_PREFIX, *SOUNDCLOUD_PREFIXES)
+
+SET_ERROR = "that's a set, not a track"
+PLAYLIST_ERROR = "that's a playlist, pick a single track"
+
+
+def too_long(duration) -> bool:
+    """A known duration over the cap. Unknown (None) is not flagged."""
+    try:
+        return duration is not None and float(duration) > gr.MAX_TRACK_S
+    except (TypeError, ValueError):
+        return False
+
+
+def source_of(url: str) -> str | None:
+    if url.startswith(YOUTUBE_PREFIX):
+        return "youtube"
+    if url.startswith(SOUNDCLOUD_PREFIXES):
+        return "soundcloud"
+    return None
 
 
 # ========================
@@ -94,6 +123,37 @@ def youtube_search(q: str, limit: int = 8) -> list[dict]:
             "channel": e.get("channel") or e.get("uploader") or "",
             "duration": e.get("duration"),
             "views": e.get("view_count"),
+            "too_long": too_long(e.get("duration")),
+        })
+    return out
+
+
+# ========================
+# SoundCloud (yt-dlp)
+# ========================
+
+def soundcloud_search(q: str, limit: int = 10) -> list[dict]:
+    from yt_dlp import YoutubeDL
+    opts = {"quiet": True, "no_warnings": True,
+            "extract_flat": "in_playlist", "skip_download": True}
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"scsearch{limit}:{q}", download=False)
+    out = []
+    for e in info.get("entries") or []:
+        if not e or not e.get("id"):
+            continue
+        url = e.get("webpage_url") or e.get("url")
+        if not url:
+            continue
+        out.append({
+            "id": str(e["id"]),
+            "url": url,
+            "title": e.get("title") or "?",
+            "channel": e.get("uploader") or e.get("channel") or "",
+            "duration": e.get("duration"),
+            "views": e.get("view_count"),
+            "source": "soundcloud",
+            "too_long": too_long(e.get("duration")),
         })
     return out
 
@@ -104,12 +164,16 @@ def slugify(text: str) -> str:
 
 
 def pull(url: str, folder: str, name: str | None = None) -> Path:
-    """Download audio from a YouTube URL into sources/<folder>/ as WAV,
-    then analyze the file and re-score all pairings. Runs inside the
-    single job worker, so print() lines stream to the UI console."""
+    """Download audio from a YouTube or SoundCloud URL into
+    sources/<folder>/ as WAV, then analyze the file, compute its beat
+    grid and re-score all pairings. Anything over 15 minutes is refused
+    (a set, not a track). Runs inside the single job worker, so print()
+    lines stream to the UI console."""
     from yt_dlp import YoutubeDL
     if folder not in FOLDERS:
         raise ValueError(f"bad folder {folder}")
+    if source_of(url) is None:
+        raise ValueError("bad url")
     dest_dir = rc.SOURCES / folder
 
     def hook(d):
@@ -120,8 +184,17 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
         elif d["status"] == "finished":
             print("  download done, converting to wav ...", flush=True)
 
-    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+    # noplaylist: a watch?v=...&list=... URL means the one video, never the
+    # list; extract_flat keeps a profile from resolving every track first
+    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
+                    "noplaylist": True, "extract_flat": "in_playlist"}) as ydl:
         meta = ydl.extract_info(url, download=False)
+    # profiles and sets (soundcloud.com/<artist>, .../sets/<x>) resolve to
+    # playlists with no duration: refuse them before anything downloads
+    if meta.get("_type") == "playlist" or meta.get("entries"):
+        raise ValueError(PLAYLIST_ERROR)
+    if too_long(meta.get("duration")):
+        raise ValueError(SET_ERROR)
     title = meta.get("title") or "track"
     channel = meta.get("channel") or meta.get("uploader") or ""
     slug = slugify(name) if name else f"{slugify(channel)}__{slugify(title)}"
@@ -131,17 +204,19 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
     opts = {
         "quiet": True, "no_warnings": True,
         "format": "bestaudio/best",
+        "noplaylist": True,
         "outtmpl": str(dest_dir / f"{slug}.%(ext)s"),
         "postprocessors": [{"key": "FFmpegExtractAudio",
                             "preferredcodec": "wav"}],
         "progress_hooks": [hook],
     }
+    dest_dir.mkdir(parents=True, exist_ok=True)
     from yt_dlp.utils import DownloadError
     try:
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
     except DownloadError as e:
-        if "403" not in str(e):
+        if "403" not in str(e) or source_of(url) != "youtube":
             raise
         # YouTube sometimes 403s the default web client's media URLs;
         # the android client usually still serves (lower-bitrate m4a).
@@ -154,11 +229,22 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
     if not wav.exists():
         raise RuntimeError(f"expected {wav} after download, not found")
 
+    if meta.get("duration") is None:
+        # no duration in the metadata: measure the file (header only)
+        # before spending minutes analyzing what may be a two hour set
+        import soundfile
+        if too_long(soundfile.info(str(wav)).duration):
+            wav.unlink()
+            raise ValueError(SET_ERROR)
+
     print("analyzing ...", flush=True)
     info = analyze_into_log(wav)
     print(f"  {info['bpm']} BPM  {info['note']} {info['mode']}  "
           f"({info['camelot']})  beat cv {info['beat_cv']}", flush=True)
     print(f"  {info['warp']}", flush=True)
+
+    print("beat grid ...", flush=True)
+    print(grid_line(wav), flush=True)
 
     print("re-scoring pairings ...", flush=True)
     from . import engine
@@ -169,6 +255,19 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
         for p in mine:
             print(f"  {p['score']:>3}  {p['bed']}  [{p['plan']}]", flush=True)
     return wav
+
+
+def grid_line(wav: Path) -> str:
+    """Compute (or load) the track's grid and say what it found. A grid
+    failure never fails the pull: the track is usable, the grid can be
+    retried later."""
+    try:
+        g = gr.ensure_grid(wav)
+    except Exception as e:
+        return f"grid: failed ({e})"
+    if not g.get("reliable"):
+        return f"grid: unreliable, sync off for this track, source={g.get('source')}"
+    return f"grid: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s, source={g.get('source')}"
 
 
 def analyze_into_log(path: Path) -> dict:

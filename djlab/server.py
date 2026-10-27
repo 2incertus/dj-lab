@@ -4,10 +4,12 @@ Single-worker job model: renders and analysis are CPU-heavy, so one job
 runs at a time and its stdout is captured live for the UI console.
 """
 
+import asyncio
 import contextlib
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -19,6 +21,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from . import analyze as an
+from . import cabine as cab
+from . import grid as gr
+from . import intake_fake
 from . import recipes as rc
 
 app = FastAPI(title="dj-lab")
@@ -27,18 +32,36 @@ STATIC = Path(__file__).parent / "static"
 # PIN gate (homelab pattern): PIN_HASH env = sha256 of the PIN, cookie
 # carries the hash itself. Empty PIN_HASH disables auth for local dev.
 PIN_HASH = os.getenv("PIN_HASH", "")
+# the installed Cabine app must reach its service worker and manifest
+# before the PIN: browsers fetch both without cookies. The Cabine shell is
+# public too (it holds no data): a fresh home-screen install has its own
+# cookie jar, so the PIN card lives inside the app and shows on a 401.
+UNGATED = ("/login", "/auth", "/health", "/cabine", "/cabine/sw.js",
+           "/cabine/manifest.webmanifest")
+
+_SAFE_NEXT = re.compile(r"/(?![/\\])[^\x00-\x20\x7f\\]*")
+
+
+def safe_next(value) -> str:
+    """Where to go after the PIN: a same-site path, else "/". Rejects
+    "//host" and "/\\host" (both leave the site) and anything with
+    whitespace, control characters or backslashes."""
+    v = value if isinstance(value, str) else ""
+    return v if _SAFE_NEXT.fullmatch(v) else "/"
 
 
 @app.middleware("http")
 async def pin_gate(request: Request, call_next):
     path = request.url.path
-    if (not PIN_HASH or path in ("/login", "/auth", "/health")
+    if (not PIN_HASH or path in UNGATED
             or path.startswith(("/static/", "/favicon"))):
         return await call_next(request)
     if request.cookies.get("dj_auth") == PIN_HASH:
         return await call_next(request)
     if path.startswith(("/api/", "/audio/")):
         return JSONResponse({"detail": "auth required"}, status_code=401)
+    if path.startswith("/cabine/"):                   # the proof page
+        return RedirectResponse(f"/login?next={safe_next(path)}", status_code=307)
     return RedirectResponse("/login", status_code=307)
 
 
@@ -83,11 +106,15 @@ p{opacity:0.6;font-size:13px}
 <p>enter the pin to reach the pressing plant</p>
 </form><script>
 const f=document.getElementById("f"),pin=document.getElementById("pin");
+const safeNext=v=>typeof v==="string"&&/^\\/(?![\\/\\\\])[^\\x00-\\x20\\x7f\\\\]*$/.test(v)?v:"/";
+const next=safeNext(new URLSearchParams(location.search).get("next"));
 f.addEventListener("submit",async e=>{e.preventDefault();
   const r=await fetch("/auth",{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({pin:pin.value})});
-  if(r.ok)location.href="/";else{pin.value="";pin.placeholder="nope"}});
+    body:JSON.stringify({pin:pin.value,next})});
+  if(r.ok){const j=await r.json().catch(()=>({}));
+    location.href=safeNext(j.next||next)}
+  else{pin.value="";pin.placeholder="nope"}});
 pin.addEventListener("input",()=>{if(pin.value.length>=4)f.requestSubmit()});
 </script></body></html>"""
 
@@ -104,7 +131,7 @@ async def auth(request: Request):
     if not PIN_HASH or digest != PIN_HASH:
         raise HTTPException(401, "wrong pin")
     https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
-    resp = JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True, "next": safe_next(body.get("next"))})
     resp.set_cookie("dj_auth", PIN_HASH, max_age=30 * 24 * 3600,
                     httponly=True, samesite="lax", secure=https)
     return resp
@@ -184,57 +211,252 @@ def escola_page():
 
 
 MESA_EXPORTS = rc.ROOT / "renders" / "sessoes"
+# what O Arquivo keeps: the mesa's wav masters and A Cabine's compressed takes
+EXPORT_TYPES = {".wav": "audio/wav", ".webm": "audio/webm", ".m4a": "audio/mp4"}
+_CLIENT_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
+
+
+def _export_kind(data: bytes):
+    """File extension for an upload by its magic bytes, or None."""
+    if data[:4] == b"RIFF":
+        return ".wav"
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return ".webm"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return ".m4a"
+    return None
+
+
+def _probe_duration(f: Path):
+    """Seconds of a compressed export via ffprobe, or None when it can't tell.
+    A streamed webm (MediaRecorder) has no duration in its header, so fall
+    back to the last audio packet's end."""
+    import subprocess
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", str(f)],
+                           capture_output=True, text=True, timeout=20)
+        val = r.stdout.strip()
+        if r.returncode == 0 and val and val != "N/A":
+            d = float(val)
+            if math.isfinite(d) and d > 0:
+                return d
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                            "-show_entries", "packet=pts_time,duration_time",
+                            "-of", "csv=p=0", str(f)],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return None
+        end = None
+        for line in r.stdout.splitlines():
+            parts = line.strip().split(",")
+            try:
+                t = float(parts[0]) + (float(parts[1]) if len(parts) > 1 and parts[1] not in ("", "N/A") else 0.0)
+            except (ValueError, IndexError):
+                continue
+            if math.isfinite(t) and (end is None or t > end):
+                end = t
+        return end if end and end > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _export_duration(f: Path, st):
+    if f.suffix == ".wav":
+        try:
+            head = f.open("rb").read(44)
+            rate = int.from_bytes(head[24:28], "little")
+            block = int.from_bytes(head[32:34], "little") or 4
+            if rate:
+                return round(max(0, st.st_size - 44) / (rate * block), 1)
+        except OSError:
+            pass
+        return None
+    side = f.with_name(f.name + ".dur")
+    try:
+        if side.stat().st_mtime >= st.st_mtime:
+            return round(float(side.read_text().strip()), 1)
+    except (OSError, ValueError):
+        pass
+    d = _probe_duration(f)
+    if d is None:
+        return None
+    try:
+        side.write_text(f"{d:.3f}")
+    except OSError:
+        pass
+    return round(d, 1)
+
+
+WEBM_TO_M4A = ["-vn", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+# an M4A take (Safari) is read and rewritten, audio untouched: a part cut by
+# a crash before its moov fails here instead of landing unplayable
+M4A_REMUX = ["-vn", "-c:a", "copy", "-movflags", "+faststart"]
+
+
+WEBM_TIMEOUT_S = 900
+
+
+def _webm_to_m4a(src: Path, dest: Path, args=WEBM_TO_M4A) -> str:
+    """Transcode a WebM/Opus take to AAC 160k in M4A (the iPhone plays it
+    from O Arquivo; Safari's WebM support is uneven), or with args=M4A_REMUX
+    remux an M4A take. "ok", "unreadable" (ffmpeg can't read it: the phone
+    stops retrying) or "timeout" (the server's trouble: the phone retries)."""
+    import subprocess
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(src),
+                            *args, "-f", "mp4", str(dest)],
+                           capture_output=True, timeout=WEBM_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except (OSError, subprocess.SubprocessError):
+        return "unreadable"
+    return "ok" if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0 else "unreadable"
+
+
+def _cid_stem(cid: str) -> str:
+    """8 hex chars from a client id (or a ride id): the parts of one ride
+    (<ride>-1, <ride>-2) share their first 8 characters, never this."""
+    return hashlib.sha256(cid.encode()).hexdigest()[:8]
+
+
+# an iPhone part: "<ride>-<n>". A ride id is a UUID (its last group is 12
+# hex chars) or the fallback "r<base36>" with no dash, so a 1 to 4 digit
+# tail can only be a part number.
+_PART_ID = re.compile(r"(.+)-([0-9]{1,4})")
+
+
+def _cid_name_stem(cid: str) -> str:
+    """The client-id part of an export's name: <stem(ride)>-p<n> for a part,
+    so the parts of one ride group in O Arquivo; <stem(cid)> otherwise."""
+    m = _PART_ID.fullmatch(cid)
+    if m:
+        return f"{_cid_stem(m.group(1))}-p{int(m.group(2))}"
+    return _cid_stem(cid)
+
+
+_upload_locks: dict = {}
+
+
+def _export_by_client_id(cid: str):
+    """The export a previous upload with this exact client_id produced.
+    Names carry _cid_name_stem(cid), maybe with a "-<n>" suffix; parts
+    stored before the -p names carry _cid_stem(cid), exports made before
+    the hash stems carry cid[:8]. The full id is always compared."""
+    sides = {*MESA_EXPORTS.glob(f"*-{_cid_name_stem(cid)}*.cid"),
+             *MESA_EXPORTS.glob(f"*-{_cid_stem(cid)}*.cid"),
+             *MESA_EXPORTS.glob(f"*-{cid[:8]}*.cid")}
+    for side in sorted(sides):
+        try:
+            if side.read_text().strip() != cid:
+                continue
+        except OSError:
+            continue
+        f = side.with_name(side.name[:-len(".cid")])
+        if f.suffix in EXPORT_TYPES and f.exists():
+            return f.name
+    return None
+
+
+def _export_file(fname: str) -> Path:
+    f = MESA_EXPORTS / Path(fname).name
+    if f.suffix not in EXPORT_TYPES or not f.is_file():
+        raise HTTPException(404, "no such export")
+    return f
 
 
 @app.get("/api/mesa/exports")
 def mesa_exports():
     MESA_EXPORTS.mkdir(parents=True, exist_ok=True)
     out = []
-    for f in sorted(MESA_EXPORTS.glob("*.wav"),
-                    key=lambda p: p.stat().st_mtime, reverse=True):
+    files = [p for p in MESA_EXPORTS.iterdir()
+             if p.suffix in EXPORT_TYPES and p.is_file()]
+    for f in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
         st = f.stat()
-        dur = None
-        try:
-            head = f.open("rb").read(44)
-            rate = int.from_bytes(head[24:28], "little")
-            block = int.from_bytes(head[32:34], "little") or 4
-            if rate:
-                dur = round(max(0, st.st_size - 44) / (rate * block), 1)
-        except OSError:
-            pass
         out.append({"file": f.name, "size": st.st_size,
-                    "mtime": int(st.st_mtime), "dur": dur})
+                    "mtime": int(st.st_mtime), "dur": _export_duration(f, st)})
     return out
 
 
 @app.post("/api/mesa/export")
-async def mesa_export_save(request: Request, name: str = "sessao"):
+async def mesa_export_save(request: Request, name: str = "sessao",
+                           client_id: str | None = None):
+    if client_id is not None and not _CLIENT_ID.fullmatch(client_id):
+        raise HTTPException(400, "bad client_id")
     data = await request.body()
     if len(data) > 200 * 1024 * 1024:
         raise HTTPException(413, "recording too large")
-    if data[:4] != b"RIFF":
-        raise HTTPException(400, "not a wav")
     MESA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    if client_id is None:
+        return await asyncio.to_thread(_save_export, data, name, None)
+    # one save per client id at a time: a retry that arrives while the first
+    # upload is still transcoding waits for it and gets the same file
+    lock = _upload_locks.setdefault(client_id, asyncio.Lock())
+    try:
+        async with lock:
+            return await asyncio.to_thread(_save_export, data, name, client_id)
+    finally:
+        if not lock.locked() and _upload_locks.get(client_id) is lock:
+            _upload_locks.pop(client_id, None)
+
+
+def _save_export(data: bytes, name: str, client_id):
+    if client_id is not None:
+        # a retry of an upload that already landed: hand back the same file
+        existing = _export_by_client_id(client_id)
+        if existing:
+            return {"file": existing}
+    ext = _export_kind(data)
+    if ext is None:
+        raise HTTPException(400, "not a wav, webm or m4a")
+    stored = ".m4a" if ext == ".webm" else ext      # webm takes become AAC in M4A
     safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-") or "sessao"
-    fname = f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}.wav"
-    (MESA_EXPORTS / fname).write_bytes(data)
+    stem = f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}"
+    if client_id is None:
+        fname = f"{stem}{stored}"
+    else:
+        stem = f"{stem}-{_cid_name_stem(client_id)}"
+        fname, n = f"{stem}{stored}", 2
+        while (MESA_EXPORTS / fname).exists():   # same second, same id prefix
+            fname, n = f"{stem}-{n}{stored}", n + 1
+    dest = MESA_EXPORTS / fname
+    part = MESA_EXPORTS / f".{fname}.part"
+    if ext in (".webm", ".m4a"):
+        # webm is transcoded to AAC, m4a remuxed (audio copied): either way
+        # ffmpeg reads the whole take, and one it cannot read is refused
+        raw = MESA_EXPORTS / f".{fname}{ext}.part"
+        try:
+            raw.write_bytes(data)
+            how = _webm_to_m4a(raw, part, WEBM_TO_M4A if ext == ".webm" else M4A_REMUX)
+            if how != "ok":
+                part.unlink(missing_ok=True)
+                if how == "timeout":
+                    raise HTTPException(503, "the server is busy, try again later")
+                raise HTTPException(400, f"that {ext[1:]} could not be read")
+        finally:
+            raw.unlink(missing_ok=True)
+    else:
+        part.write_bytes(data)
+    part.replace(dest)
+    for side in (".dur", ".cid"):
+        dest.with_name(fname + side).unlink(missing_ok=True)
+    if client_id is not None:
+        dest.with_name(fname + ".cid").write_text(client_id)
     return {"file": fname}
 
 
 @app.get("/api/mesa/export/{fname}")
 def mesa_export_get(fname: str):
-    f = MESA_EXPORTS / Path(fname).name
-    if not f.exists():
-        raise HTTPException(404, "no such export")
-    return FileResponse(f, media_type="audio/wav")
+    f = _export_file(fname)
+    return FileResponse(f, media_type=EXPORT_TYPES[f.suffix])
 
 
 @app.delete("/api/mesa/export/{fname}")
 def mesa_export_delete(fname: str):
-    f = MESA_EXPORTS / Path(fname).name
-    if not f.exists():
-        raise HTTPException(404, "no such export")
+    f = _export_file(fname)
     f.unlink()
+    for side in (".dur", ".cid"):
+        f.with_name(f.name + side).unlink(missing_ok=True)
     return {"deleted": fname}
 
 
@@ -383,6 +605,8 @@ def intake_liked():
 @app.get("/api/intake/spotify/search")
 def intake_spotify_search(q: str):
     from . import intake
+    if intake_fake.enabled():
+        return {"tracks": intake_fake.search("spotify", q)}
     try:
         return {"tracks": intake.spotify_search(q)}
     except RuntimeError as e:
@@ -392,7 +616,20 @@ def intake_spotify_search(q: str):
 @app.get("/api/intake/youtube/search")
 def intake_youtube_search(q: str):
     from . import intake
+    if intake_fake.enabled():
+        return {"videos": intake_fake.search("youtube", q)}
     return {"videos": intake.youtube_search(q)}
+
+
+@app.get("/api/intake/soundcloud/search")
+def intake_soundcloud_search(q: str):
+    from . import intake
+    if intake_fake.enabled():
+        return {"tracks": intake_fake.search("soundcloud", q)}
+    try:
+        return {"tracks": intake.soundcloud_search(q)}
+    except Exception as e:
+        raise HTTPException(502, f"soundcloud search failed: {e}")
 
 
 @app.post("/api/intake/pull")
@@ -400,13 +637,15 @@ def intake_pull(data: dict):
     from . import intake
     url = data.get("url", "")
     folder = data.get("folder", "")
-    if not url.startswith("https://www.youtube.com/watch?v="):
+    source = intake.source_of(url) if isinstance(url, str) else None
+    if source is None:
         raise HTTPException(400, "bad url")
     if folder not in intake.FOLDERS:
         raise HTTPException(400, "bad folder")
+    pull = intake_fake.pull if intake_fake.enabled() else intake.pull
     return {"job": _run_job(
-        "pull from youtube",
-        lambda: intake.pull(url, folder, data.get("name")))}
+        f"pull from {source}",
+        lambda: pull(url, folder, data.get("name")))}
 
 
 _STEM_NAMES = ("vocals", "drums", "bass", "other")
@@ -534,6 +773,127 @@ def post_settings(num: int, data: dict):
         raise HTTPException(404, "no such blend")
     rc.save_settings(num, data)
     return {"saved": True}
+
+
+# ---- A Cabine: the phone FLX4 ------------------------------------------
+
+CABINE_SW = Path(__file__).parent / "cabine_sw.js"
+CABINE_MANIFEST = {
+    "name": "A Cabine",
+    "short_name": "Cabine",
+    "description": "A DDJ-FLX4 in your pocket, for practice on the train",
+    "start_url": "/cabine",
+    "scope": "/cabine",
+    "display": "fullscreen",
+    "orientation": "landscape",
+    "background_color": "#2A0A2E",
+    "theme_color": "#2A0A2E",
+    "icons": [
+        {"src": "/static/icon-180.png?v=3", "sizes": "180x180", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/static/icon-192.png?v=3", "sizes": "192x192", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/static/icon-512.png?v=3", "sizes": "512x512", "type": "image/png",
+         "purpose": "any maskable"},
+    ],
+}
+
+
+def _cabine_src(file) -> Path:
+    src = rc.find_file(Path(str(file or "")).name) if file else None
+    if not src:
+        raise HTTPException(404, "no such track")
+    return src
+
+
+@app.get("/cabine")
+def cabine_page():
+    return FileResponse(STATIC / "cabine" / "cabine.html")
+
+
+@app.get("/cabine/proof")
+def cabine_proof_page():
+    """Dev-only engine proof: two decks, load, play, scrub, underruns."""
+    return FileResponse(STATIC / "cabine" / "proof.html")
+
+
+@app.get("/cabine/sw.js")
+def cabine_sw():
+    return FileResponse(CABINE_SW, media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/cabine",
+                                 "Cache-Control": "no-cache"})
+
+
+@app.get("/cabine/manifest.webmanifest")
+def cabine_manifest():
+    return JSONResponse(CABINE_MANIFEST, media_type="application/manifest+json")
+
+
+@app.get("/api/cabine/library")
+def cabine_library():
+    return {"tracks": cab.library()}
+
+
+@app.get("/api/cabine/carry")
+def cabine_carry(file: str):
+    return FileResponse(cab.carry_mp3(_cabine_src(file)), media_type="audio/mpeg")
+
+
+@app.get("/api/cabine/peaks")
+def cabine_peaks(file: str):
+    return FileResponse(cab.peaks(_cabine_src(file)),
+                        media_type="application/octet-stream")
+
+
+@app.get("/api/cabine/grid")
+def cabine_grid(file: str):
+    g = gr.load_grid(_cabine_src(file))
+    if g is None:
+        raise HTTPException(404, "no grid yet")
+    return g
+
+
+@app.post("/api/cabine/grid")
+def cabine_grid_run(data: dict):
+    src = _cabine_src(data.get("file"))
+    return {"job": _run_job(f"beat grid: {src.name}", lambda: gr.ensure_grid(src))}
+
+
+@app.post("/api/cabine/grid/all")
+def cabine_grid_all(data: dict | None = None):
+    """One job that grids every analyzed track (under 15 min) lacking a grid;
+    {"folder": "techno"} limits it to one sources/ folder."""
+    folder = (data or {}).get("folder") or None
+    if folder is not None and (not isinstance(folder, str) or folder not in _intake_folders()):
+        raise HTTPException(400, "bad folder")
+    label = "beat grid: every track" + (f" in {folder}" if folder else "")
+    return {"job": _run_job(label, lambda: cab.grid_all(folder))}
+
+
+def _intake_folders() -> set[str]:
+    from . import intake
+    return intake.FOLDERS
+
+
+@app.post("/api/cabine/grid/fix")
+def cabine_grid_fix(data: dict):
+    src = _cabine_src(data.get("file"))
+    g = gr.load_grid(src)
+    if g is None:
+        raise HTTPException(404, "no grid yet")
+    value = data.get("value")
+    try:
+        value = None if value is None else float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "value must be a number")
+    if value is not None and not math.isfinite(value):
+        raise HTTPException(400, "value must be a finite number")
+    try:
+        fixed = gr.apply_fix(g, str(data.get("op", "")), value)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    gr.save_grid(src, fixed)
+    return fixed
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
