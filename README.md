@@ -61,6 +61,36 @@ source into vocals, drums, bass and other on the GPU, cached once and reused.
 **O Percurso.** Nineteen carimbos and ten provas: a path through the room that marks what
 you have actually done rather than what you have read.
 
+## A Cabine
+
+A DDJ-FLX4 on a phone, inside the mesa at `/cabine`. It exists so a friend who owns the
+real controller can practice on the train. It behaves the way rekordbox does, with both
+decks and the mixer in the hardware's positions. Cue is split: the left ear is cue, the
+right ear is master. You carry tracks to the phone, mix with no signal at all, record,
+and the take uploads to O Arquivo the next time you are back online.
+
+In five lines:
+
+1. Install it to the home screen first, so it opens with no signal.
+2. Carry tracks from A Caixa while you are still on wifi.
+3. Turn the phone sideways.
+4. Use BROWSE and LOAD to put a track on each deck.
+5. Press REC, mix, press it again.
+
+Three rekordbox settings are read off the owner's install, not guessed, and each is a
+single constant: `EQ_MODE` in `engine/mixer.js`, `DEFAULT_RANGE` in `engine/deck.js` and
+`LOAD_LOCK` in `bindings.js`. Change them there. The layout has one switch, `?board=exact`,
+which draws the panel at the controller's aspect ratio instead of spreading it to fill
+the screen.
+
+The service worker has one rule: bump `VERSION` and `SHELL_HASH` in `djlab/cabine_sw.js`
+on every client change. Phones pick the new version up on the next launch.
+
+Credits. Beat This! (CPJKU, MIT) makes the beat and downbeat grids. The Pioneer DJ
+DDJ-FLX4 operating instructions are the behavior reference. Mixxx's FLX4 mapping was read
+as a second witness only (GPL, nothing copied). NextDJ (MIT) was consulted, no code
+copied.
+
 ## Running it
 
 ```bash
@@ -95,6 +125,11 @@ djlab/
   warp.py        time stretch plans
   synth.py       synth voices
   static/        index.html, mesa.html, app.js, escola.js, style.css
+  static/cabine/ A Cabine client: engine/, ui/, store.js + sync.js, app.js
+  cabine.py      carry-ready MP3s, grids and waveform peaks for the phone
+  grid.py        beat and downbeat grids (Beat This!)
+  cabine_sw.js   the A Cabine service worker
 ```
 
-Audio lives outside git: `sources/`, `stems/`, `renders/`, `beds/`, `previews/`.
+Audio lives outside git: `sources/` (including `sources/techno/`), `stems/`, `renders/`, `beds/`, `previews/`,
+and `carry/`, the phone-ready copies A Cabine builds.
