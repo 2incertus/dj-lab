@@ -117,6 +117,47 @@ def test_pull_refuses_sets_before_download(ydl, crate):
     assert not any(c[0] == "download" for c in ydl.calls)
 
 
+@pytest.mark.parametrize("url", [
+    "https://soundcloud.com/some-artist",
+    "https://soundcloud.com/some-artist/sets/a-playlist",
+    "https://www.youtube.com/watch?v=x&list=PL123",
+])
+def test_pull_refuses_playlists_before_download(ydl, crate, url):
+    ydl.info = {"_type": "playlist", "title": "A Playlist", "entries": [
+        {"id": "1", "title": "one", "duration": 300},
+        {"id": "2", "title": "two", "duration": 320},
+    ]}
+    with pytest.raises(ValueError, match="that's a playlist, pick a single track"):
+        intake.pull(url, "techno")
+    assert not any(c[0] == "download" for c in ydl.calls)
+
+
+def test_pull_refuses_entries_without_playlist_type(ydl, crate):
+    ydl.info = {"title": "Profile", "entries": [{"id": "1", "duration": 300}]}
+    with pytest.raises(ValueError, match="that's a playlist, pick a single track"):
+        intake.pull("https://soundcloud.com/some-artist", "techno")
+    assert not any(c[0] == "download" for c in ydl.calls)
+
+
+def test_pull_never_follows_playlists(ydl, crate, click_track, monkeypatch):
+    from djlab import grid
+    monkeypatch.setattr(grid, "ensure_grid", lambda src: {
+        "bpm": 128.0, "first_beat_s": 0.5, "downbeat_s": 0.5, "beat_cv": 0.01,
+        "reliable": True, "source": "beat_this", "fixed": False})
+    ydl.info = {"title": "Kick", "uploader": "Lab", "duration": 2}
+    ydl.on_download = _write_click(click_track, 2.0)
+    inits = []
+    orig_init = FakeYDL.__init__
+
+    def spy_init(self, opts=None):
+        inits.append(dict(opts or {}))
+        orig_init(self, opts)
+    monkeypatch.setattr(FakeYDL, "__init__", spy_init)
+    intake.pull("https://www.youtube.com/watch?v=x&list=PL123", "techno")
+    assert len(inits) == 2                       # metadata + download
+    assert all(o.get("noplaylist") is True for o in inits)
+
+
 def test_pull_refuses_long_file_when_duration_unknown(ydl, crate, monkeypatch, click_track):
     ydl.info = {"title": "Mystery", "uploader": "M"}          # no duration
     ydl.on_download = _write_click(click_track, 1.0)
@@ -141,6 +182,15 @@ def test_pull_url_whitelist(crate, monkeypatch):
                                             "folder": "techno"}).status_code == 400
     assert c.post("/api/intake/pull", json={"url": "https://soundcloud.com/a/b",
                                             "folder": "nope"}).status_code == 400
+    for bad in ("https://www.youtube.com.evil.com/watch?v=x",
+                "http://www.youtube.com/watch?v=x",
+                "http://soundcloud.com/a/b",
+                "http://api.soundcloud.com/tracks/1",
+                "HTTPS://soundcloud.com/a/b",
+                "HTTPS://www.youtube.com/watch?v=x",
+                "Https://api.soundcloud.com/tracks/1"):
+        assert c.post("/api/intake/pull", json={"url": bad, "folder": "techno"}
+                      ).status_code == 400, bad
     for url in ("https://soundcloud.com/artist/track",
                 "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A2309158322",
                 "https://www.youtube.com/watch?v=abc"):

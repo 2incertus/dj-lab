@@ -34,6 +34,7 @@ SOUNDCLOUD_PREFIXES = ("https://soundcloud.com/", "https://api.soundcloud.com/tr
 PULL_PREFIXES = (YOUTUBE_PREFIX, *SOUNDCLOUD_PREFIXES)
 
 SET_ERROR = "that's a set, not a track"
+PLAYLIST_ERROR = "that's a playlist, pick a single track"
 
 
 def too_long(duration) -> bool:
@@ -183,8 +184,15 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
         elif d["status"] == "finished":
             print("  download done, converting to wav ...", flush=True)
 
-    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+    # noplaylist: a watch?v=...&list=... URL means the one video, never the
+    # list; extract_flat keeps a profile from resolving every track first
+    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
+                    "noplaylist": True, "extract_flat": "in_playlist"}) as ydl:
         meta = ydl.extract_info(url, download=False)
+    # profiles and sets (soundcloud.com/<artist>, .../sets/<x>) resolve to
+    # playlists with no duration: refuse them before anything downloads
+    if meta.get("_type") == "playlist" or meta.get("entries"):
+        raise ValueError(PLAYLIST_ERROR)
     if too_long(meta.get("duration")):
         raise ValueError(SET_ERROR)
     title = meta.get("title") or "track"
@@ -196,6 +204,7 @@ def pull(url: str, folder: str, name: str | None = None) -> Path:
     opts = {
         "quiet": True, "no_warnings": True,
         "format": "bestaudio/best",
+        "noplaylist": True,
         "outtmpl": str(dest_dir / f"{slug}.%(ext)s"),
         "postprocessors": [{"key": "FFmpegExtractAudio",
                             "preferredcodec": "wav"}],
