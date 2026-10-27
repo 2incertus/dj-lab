@@ -365,7 +365,7 @@ test("drainUploads posts each finished take once, as name=cabine with its client
   await store.startRecording({ id: "ride-live", mime: "audio/webm" });         // still recording
   await store.appendChunk("ride-live", 0, new Blob([new Uint8Array([9])]));
   const r = await sync.drainUploads();
-  assert.deepEqual(r, { sent: 1, failed: 0, locked: false, offline: false });
+  assert.deepEqual(r, { sent: 1, failed: 0, rejected: 0, locked: false, offline: false });
   assert.deepEqual(server.posts, [{ name: "cabine", cid: "ride-aaaa-1", type: "audio/webm;codecs=opus" }]);
   assert.deepEqual([...server.exports.get("ride-aaaa-1").bytes], [1, 2, 3]);
   const recs = await store.listRecordings();
@@ -407,4 +407,33 @@ test("drainUploads: a server error retries on the next drain, offline stops quie
   r = await sync.drainUploads();
   assert.equal(r.sent, 1);
   assert.equal((await store.listRecordings())[0].uploaded, true);
+});
+
+test("drainUploads: 400 or 413 marks the take rejected (kept, never sent again); 503 keeps retrying", async () => {
+  const { server, store, sync } = await lockedSetup({ authed: true });
+  await finishedRecording(store, "ride-dddd-1", [1]);
+  server.exportStatus = 413;
+  let r = await sync.drainUploads();
+  assert.equal(r.rejected, 1);
+  let rec = (await store.listRecordings())[0];
+  assert.equal(rec.rejected, 413);
+  assert.equal(rec.uploaded, false);
+  await sync.drainUploads();
+  assert.equal(server.posts.length, 1, "a rejected take is not sent again");
+
+  await finishedRecording(store, "ride-eeee-1", [2]);
+  server.exportStatus = 503;
+  r = await sync.drainUploads();
+  assert.equal(r.failed, 1);
+  assert.equal((await store.listRecordings()).find((x) => x.id === "ride-eeee-1").rejected, undefined);
+  r = await sync.drainUploads();
+  assert.equal(r.sent, 1);
+});
+
+test("drainUploads skips empty takes", async () => {
+  const { server, store, sync } = await lockedSetup({ authed: true });
+  await store.startRecording({ id: "ride-ffff-1", mime: "audio/webm" });
+  await store.finishRecording("ride-ffff-1", { durationS: 0.1 });
+  await sync.drainUploads();
+  assert.equal(server.posts.length, 0);
 });

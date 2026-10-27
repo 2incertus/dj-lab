@@ -2,7 +2,8 @@
 //
 // new Recorder(ctx, mixer.masterTap, store, opts)
 //   start() -> ride id, stop() -> ride id, state ("inactive" | "recording"),
-//   elapsed() seconds, flushed() (every chunk so far is in IndexedDB).
+//   elapsed() seconds, flushed() (every chunk so far is in IndexedDB),
+//   settled() (any stop a failure started has finished).
 //
 // Master only: it taps mixer.masterTap (after MASTER LEVEL and the clipper,
 // before the split-cue fold), never the merged output, so the headphones'
@@ -18,6 +19,11 @@
 //     own export. A crash loses at most the current part. PART_S is a
 //     constant because the iPhone measurement (does a stop-less MP4 play?) is
 //     still to come; if it plays, parts can go.
+//
+// A chunk that cannot be saved (the phone's storage is full) or a part that
+// cannot start stops the take right there: it is finished as "incomplete"
+// with everything flushed before, REC goes dark, and opts.onerror(err) lets
+// the app say so on the strip. Nothing records on silently with holes.
 
 export const CHUNK_MS = 5000;
 export const PART_S = 300;
@@ -50,6 +56,10 @@ export class Recorder {
     this.setTimer = opts.setTimer || ((fn, ms) => setInterval(fn, ms));
     this.clearTimer = opts.clearTimer || ((t) => clearInterval(t));
     this.onfinish = opts.onfinish || (() => {});
+    this.onerror = opts.onerror || (() => {});
+    this._failed = null;          // the error that stopped the current take
+    this._failStop = Promise.resolve();
+    this._stopping = null;
     this.dest = null;
     this.ride = null;
     this.format = null;
@@ -69,6 +79,18 @@ export class Recorder {
   /** Every chunk received so far is written. */
   flushed() { return this._write; }
 
+  /** A stop that a failure started has finished. */
+  settled() { return this._failStop; }
+
+  /** First failure of a take: stop it there, flagged incomplete, and tell the app. */
+  _fail(err) {
+    if (this._failed || !this.ride) return;
+    this._failed = err;
+    console.warn("A Cabine: the recording stopped", err);
+    try { this.onerror(err); } catch (e) { /* app hook */ }
+    this._failStop = this.stop().catch((e) => console.warn("A Cabine: stopping the take", e));
+  }
+
   /** The ids of recordings being written now (store.finishStale leaves them). */
   liveIds() { return this.part ? new Set([this.part.id]) : new Set(); }
 
@@ -81,6 +103,7 @@ export class Recorder {
       if (!this.dest) this.dest = this.ctx.createMediaStreamDestination();
       this.tap.connect(this.dest);
       this.format = fmt;
+      this._failed = null;
       this.ride = this.newId();
       this.partNo = 0;
       this.t0 = this.now();
@@ -106,11 +129,14 @@ export class Recorder {
     const part = { id, mr, t0: this.now(), seq: 0, stopped: null };
     part.stopped = new Promise((resolve) => { mr.onstop = () => resolve(); });
     mr.ondataavailable = (e) => {
-      if (!e.data || !e.data.size) return;
+      if (!e.data || !e.data.size || part.broken) return;
       const seq = part.seq++;
       this._write = this._write
-        .then(() => this.store.appendChunk(id, seq, e.data))
-        .catch((err) => console.warn("A Cabine: a recording chunk was not saved", err));
+        .then(() => (part.broken ? null : this.store.appendChunk(id, seq, e.data)))
+        .catch((err) => {
+          part.broken = true;              // later chunks would only leave holes
+          this._fail(err);
+        });
     };
     mr.start(this.chunkMs);
     return part;
@@ -120,7 +146,13 @@ export class Recorder {
     if (part.mr.state !== "inactive") part.mr.stop();
     await part.stopped;
     await this._write;
-    await this.store.finishRecording(part.id, { durationS: (this.now() - part.t0) / 1000 });
+    const incomplete = !!(part.broken || this._failed);
+    try {
+      await this.store.finishRecording(part.id, { durationS: (this.now() - part.t0) / 1000, incomplete });
+    } catch (e) {
+      // the store is full too: the next start's finishStale closes it
+      console.warn("A Cabine: the take could not be closed", e);
+    }
     try { this.onfinish(part.id); } catch (e) { /* app hook */ }
   }
 
@@ -132,11 +164,19 @@ export class Recorder {
       this.part = await this._startPart();
       await this._endPart(old);
     })();
-    try { await this._busy; } finally { this._busy = null; }
+    let failed = null;
+    try { await this._busy; } catch (e) { failed = e; } finally { this._busy = null; }
+    if (failed) this._fail(failed);        // the part that still records is stopped there
   }
 
-  /** Stop; resolves with the ride id once the last chunk is stored. */
-  async stop() {
+  /** Stop; resolves with the ride id once the last chunk is stored. A stop
+   *  while one runs (REC tapped as a failure stops the take) joins it. */
+  stop() {
+    if (!this._stopping) this._stopping = this._stop().finally(() => { this._stopping = null; });
+    return this._stopping;
+  }
+
+  async _stop() {
     if (this._busy) { try { await this._busy; } catch (e) { /* start failed */ } }
     if (!this.ride) return null;
     const ride = this.ride;

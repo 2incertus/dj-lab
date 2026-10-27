@@ -242,3 +242,23 @@ test("storeSource_hands_the_loader_saved_hot_cues_and_peaks", async () => {
   assert.deepEqual([...new Uint8Array(await src.getPeaks("a.wav"))], [7, 8], "and on their own");
   assert.equal(await src.getPeaks("missing.wav"), null);
 });
+
+test("a take with no chunks finishes as empty; incomplete and rejected are recorded", async () => {
+  const { store } = await fresh();
+  await store.startRecording({ id: "none", mime: "audio/webm", createdAt: 1 });
+  await store.finishRecording("none", { durationS: 0.2 });
+  await store.startRecording({ id: "stale", mime: "audio/webm", createdAt: 2 });
+  await store.finishStale(new Set());
+  await store.startRecording({ id: "cut", mime: "audio/webm", createdAt: 3 });
+  await store.appendChunk("cut", 0, new Blob([new Uint8Array([1])]));
+  await store.finishRecording("cut", { durationS: 30, incomplete: true });
+  await store.markRejected("cut", 413);
+  const by = Object.fromEntries((await store.listRecordings()).map((r) => [r.id, r]));
+  assert.equal(by.none.empty, true);
+  assert.equal(by.stale.empty, true);
+  assert.equal(by.cut.empty, false);
+  assert.equal(by.cut.incomplete, true);
+  assert.equal(by.cut.rejected, 413);
+  assert.equal(by.cut.uploaded, false);
+  assert.ok(await store.recordingBlob("cut"), "a rejected take stays on the phone");
+});

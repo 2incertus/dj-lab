@@ -5,8 +5,13 @@
 //   audio       key file: {file, mp3: ArrayBuffer, peaks: ArrayBuffer} (heavy)
 //   hotcues     key file: {file, cues}
 //   recordings  key id:   {id, mime, createdAt, uploaded, done, chunks, bytes,
-//                          durationS, ride, part, file, recovered} (light; a
-//                          recording made by putRecording also has a blob)
+//                          durationS, ride, part, file, recovered, empty,
+//                          incomplete, rejected} (light; a recording made by
+//                          putRecording also has a blob). empty: finished
+//                          with no audio (never uploaded, not listed);
+//                          incomplete: a chunk could not be saved and the take
+//                          was stopped there; rejected: the server's 400/413
+//                          status (kept on the phone, never sent again).
 //   chunks      key "<id>#<seq, 6 digits>": {key, id, seq, blob}   (v2)
 //
 // A recording is written while it records: every MediaRecorder chunk (5 s)
@@ -178,11 +183,23 @@ export class Store {
     await committed(tx);
   }
 
-  async finishRecording(id, { durationS = null } = {}) {
+  async finishRecording(id, { durationS = null, incomplete = false } = {}) {
     const tx = this.db.transaction("recordings", "readwrite");
     const st = tx.objectStore("recordings");
     const r = await done(st.get(id));
-    if (r) st.put({ ...r, done: true, durationS: durationS ?? r.durationS ?? null });
+    if (r) {
+      st.put({ ...r, done: true, durationS: durationS ?? r.durationS ?? null,
+        empty: !r.blob && !(r.chunks > 0), incomplete: !!(incomplete || r.incomplete) });
+    }
+    await committed(tx);
+  }
+
+  /** The server refused this take for good (400, 413): keep it, stop sending it. */
+  async markRejected(id, status) {
+    const tx = this.db.transaction("recordings", "readwrite");
+    const st = tx.objectStore("recordings");
+    const r = await done(st.get(id));
+    if (r) st.put({ ...r, rejected: status });
     await committed(tx);
   }
 
@@ -191,7 +208,7 @@ export class Store {
     const stale = (await this._all("recordings")).filter((r) => r.done === false && !live.has(r.id));
     for (const r of stale) {
       const tx = this.db.transaction("recordings", "readwrite");
-      tx.objectStore("recordings").put({ ...r, done: true, recovered: true });
+      tx.objectStore("recordings").put({ ...r, done: true, recovered: true, empty: !r.blob && !(r.chunks > 0) });
       await committed(tx);
     }
     return stale.map((r) => r.id);

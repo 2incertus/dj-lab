@@ -291,25 +291,41 @@ def _export_duration(f: Path, st):
 WEBM_TO_M4A = ["-vn", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
 
 
-def _webm_to_m4a(src: Path, dest: Path) -> bool:
+WEBM_TIMEOUT_S = 900
+
+
+def _webm_to_m4a(src: Path, dest: Path) -> str:
     """Transcode a WebM/Opus take to AAC 160k in M4A (the iPhone plays it
-    from O Arquivo; Safari's WebM support is uneven). False if ffmpeg can't."""
+    from O Arquivo; Safari's WebM support is uneven). "ok", "unreadable"
+    (ffmpeg can't read it: the phone stops retrying) or "timeout" (the
+    server's trouble: the phone retries)."""
     import subprocess
     try:
         r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(src),
                             *WEBM_TO_M4A, "-f", "mp4", str(dest)],
-                           capture_output=True, timeout=900)
+                           capture_output=True, timeout=WEBM_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return "timeout"
     except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+        return "unreadable"
+    return "ok" if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0 else "unreadable"
+
+
+def _cid_stem(cid: str) -> str:
+    """8 hex chars from the whole client id: the parts of one ride
+    (<ride>-1, <ride>-2) share their first 8 characters, never this."""
+    return hashlib.sha256(cid.encode()).hexdigest()[:8]
 
 
 _upload_locks: dict = {}
 
 
 def _export_by_client_id(cid: str):
-    """The export a previous upload with this exact client_id produced."""
-    for side in MESA_EXPORTS.glob(f"*-{cid[:8]}.*.cid"):
+    """The export a previous upload with this exact client_id produced.
+    Names carry _cid_stem(cid), maybe with a "-<n>" suffix; exports made
+    before the hash stems carry cid[:8]. The full id is always compared."""
+    sides = {*MESA_EXPORTS.glob(f"*-{_cid_stem(cid)}*.cid"), *MESA_EXPORTS.glob(f"*-{cid[:8]}*.cid")}
+    for side in sorted(sides):
         try:
             if side.read_text().strip() != cid:
                 continue
@@ -378,7 +394,7 @@ def _save_export(data: bytes, name: str, client_id):
     if client_id is None:
         fname = f"{stem}{stored}"
     else:
-        stem = f"{stem}-{client_id[:8]}"
+        stem = f"{stem}-{_cid_stem(client_id)}"
         fname, n = f"{stem}{stored}", 2
         while (MESA_EXPORTS / fname).exists():   # same second, same id prefix
             fname, n = f"{stem}-{n}{stored}", n + 1
@@ -388,8 +404,11 @@ def _save_export(data: bytes, name: str, client_id):
         raw = MESA_EXPORTS / f".{fname}.webm.part"
         try:
             raw.write_bytes(data)
-            if not _webm_to_m4a(raw, part):
+            how = _webm_to_m4a(raw, part)
+            if how != "ok":
                 part.unlink(missing_ok=True)
+                if how == "timeout":
+                    raise HTTPException(503, "the server is busy, try again later")
                 raise HTTPException(400, "that webm could not be read")
         finally:
             raw.unlink(missing_ok=True)

@@ -257,7 +257,7 @@ export function makeSync({ store, fetch: fetchFn = (...a) => globalThis.fetch(..
 
   async function drainPass(acc) {
     for (const rec of await store.listRecordings()) {
-      if (rec.uploaded || rec.done === false || rec.empty) continue;
+      if (rec.uploaded || rec.done === false || rec.empty || rec.rejected) continue;
       const blob = await store.recordingBlob(rec.id);
       if (!blob || !blob.size) continue;                  // nothing was flushed
       let r;
@@ -274,7 +274,12 @@ export function makeSync({ store, fetch: fetchFn = (...a) => globalThis.fetch(..
         acc.locked = true;                                 // stays queued until the PIN
         return;
       }
-      if (!r.ok) { acc.failed++; continue; }               // retried on the next drain
+      if (r.status === 400 || r.status === 413) {          // refused for good: kept, not resent
+        await store.markRejected(rec.id, r.status);
+        acc.rejected++;
+        continue;
+      }
+      if (!r.ok) { acc.failed++; continue; }               // 5xx and the rest: the next drain
       let file = null;
       try { file = (await r.json()).file || null; } catch (e) { /* the server has it */ }
       await store.markUploaded(rec.id, file);
@@ -287,7 +292,7 @@ export function makeSync({ store, fetch: fetchFn = (...a) => globalThis.fetch(..
   function drainUploads() {
     if (draining) { drainAgain = true; return draining; }
     draining = (async () => {
-      const acc = { sent: 0, failed: 0, locked: false, offline: false };
+      const acc = { sent: 0, failed: 0, rejected: 0, locked: false, offline: false };
       try {
         do {
           drainAgain = false;

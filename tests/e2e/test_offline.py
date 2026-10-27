@@ -622,3 +622,37 @@ def test_first_tap_retries_a_resume_that_did_not_take(chromium, base_url, auth_c
         page.wait_for_function("() => window.cabine.engine.ctx.state === 'running'")
     finally:
         ctx.close()
+
+
+def test_rec_stops_when_the_phone_cannot_save(chromium, base_url, auth_cookie, play_tracks):
+    """Storage full mid-ride: the take stops at the first chunk that cannot be
+    saved, REC goes dark, the strip says so, and the crate lists the take as
+    stopped early with what was flushed."""
+    a = play_tracks["tone_a"]
+    ctx = _phone(chromium, auth_cookie)
+    ctx.route("**/api/mesa/export?**", lambda route: route.abort())      # stays on the phone
+    try:
+        page = _boot(ctx, base_url, carry=(a,))
+        r = board(page)
+        load(page, r, 0, a)
+        tap(page, r, "d1-play")
+        page.evaluate("""() => { const s = window.cabine.store, real = s.appendChunk.bind(s); let n = 0;
+            s.appendChunk = (...a) => n++ < 1 ? real(...a)
+              : Promise.reject(new DOMException('the quota has been exceeded', 'QuotaExceededError')); }""")
+        rec_tap(page)
+        page.wait_for_function("() => window.cabine.recorder && window.cabine.recorder.state === 'recording'")
+        page.wait_for_function("() => window.cabine.recorder.state === 'inactive'", timeout=20_000)
+        page.wait_for_function("() => document.querySelector('.cab-strip-rec').textContent === 'REC'")
+        assert "cab-on" not in page.locator(".cab-strip-rec").get_attribute("class")
+        assert "could not save" in (page.evaluate("() => window.cabine.strip.flashing(0)") or "")
+        take = [x for x in _recordings(page) if x["done"]][0]
+        assert take["chunks"] == 1
+        assert page.evaluate("async (id) => (await window.cabine.store.listRecordings()).find(r => r.id === id).incomplete",
+                             take["id"]) is True
+        page.evaluate("() => window.cabine.showCrate()")
+        row = page.locator(f'.cab-rec-row[data-rec="{take["id"]}"]')
+        row.wait_for()
+        assert "stopped early" in row.inner_text()
+        assert page.errors == []
+    finally:
+        ctx.close()

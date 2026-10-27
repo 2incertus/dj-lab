@@ -27,7 +27,8 @@
 //   board); "later" quiets it until the phone comes back online.
 // - REC on the strip: engine/recorder.js on mixer.masterTap. Finished takes
 //   upload to O Arquivo (sync.drainUploads) on start, on `online`, every
-//   60 s while online and right after a take ends.
+//   60 s while online and right after a take ends. A chunk the phone cannot
+//   save stops the take (kept as "stopped early") with a message on the strip.
 // - Audio session and interruptions: if the context goes "interrupted" or
 //   "suspended" while a deck plays or REC runs, the "tap to resume" veil
 //   shows; the tap resumes the context, sets the audio session again and
@@ -54,6 +55,8 @@ import { makePinCard, installCard, installSeen, isInstalled, makeResumeVeil } fr
 
 export const UPLOAD_EVERY_MS = 60000;
 export const AWAKE_CHECK_MS = 1000;
+export const REC_STOPPED_TEXT = "REC stopped: the phone could not save more. What was recorded is kept";
+export const REC_STOPPED_MS = 6000;
 
 const root = document.getElementById("cab-root");
 const landscape = window.matchMedia("(orientation: landscape)");
@@ -162,6 +165,11 @@ async function toggleRec() {
   if (!app.recorder) {
     app.recorder = new Recorder(rig.ctx, rig.mixer.masterTap, app.store, {
       onfinish: () => { drain(); },
+      // a chunk that could not be saved (storage full): the take stops there
+      onerror: () => {
+        if (app.strip) app.strip.flash(0, REC_STOPPED_TEXT, performance.now(), REC_STOPPED_MS);
+        if (app.crate) app.crate.refreshRecordings();
+      },
     });
   }
   const rec = app.recorder;

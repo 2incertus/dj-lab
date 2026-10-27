@@ -156,14 +156,21 @@ export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = ()
     const recs = (await store.listRecordings()).filter((r) => !r.empty);
     if (!alive || !$("#cab-recs")) return;
     $("#cab-recs").hidden = recs.length === 0;
-    const waiting = recs.filter((r) => !r.uploaded).length;
-    $("#cab-recs-count").textContent = waiting ? `${waiting} waiting to upload` : `${recs.length} in O Arquivo`;
+    const waiting = recs.filter((r) => !r.uploaded && !r.rejected).length;
+    const up = recs.filter((r) => r.uploaded).length;
+    const kept = recs.filter((r) => !r.uploaded && r.rejected).length;
+    $("#cab-recs-count").textContent = [waiting && `${waiting} waiting to upload`,
+      up && `${up} in O Arquivo`, kept && `${kept} kept on the phone`].filter(Boolean).join(", ");
     $("#cab-rec-list").innerHTML = recs.slice().reverse().map((r) => {
-      const status = r.uploaded ? "in O Arquivo" : r.done === false ? "recording" : "waiting to upload";
+      const status = r.uploaded ? "in O Arquivo"
+        : r.done === false ? "recording"
+          : r.rejected ? (r.rejected === 413 ? "too big for O Arquivo, kept here" : "O Arquivo refused it, kept here")
+            : "waiting to upload";
+      const early = r.incomplete ? " &middot; stopped early" : "";
       const len = r.durationS ? formatDuration(r.durationS) : "";
       const part = r.part ? ` &middot; part ${r.part}` : "";
       return `<li class="cab-rec-row${r.uploaded ? " cab-rec-up" : ""}" data-rec="${esc(r.id)}">
-        <span>${esc(when(r.createdAt || 0))}${part}${len ? ` &middot; ${esc(len)}` : ""}</span>
+        <span>${esc(when(r.createdAt || 0))}${part}${len ? ` &middot; ${esc(len)}` : ""}${early}</span>
         <b class="cab-rec-status">${status}</b></li>`;
     }).join("");
   }

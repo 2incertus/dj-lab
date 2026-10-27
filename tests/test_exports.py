@@ -97,7 +97,8 @@ def test_webm_upload_is_stored_as_m4a(client, exports, tmp_path):
     r = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
     assert r.status_code == 200, r.text
     f = r.json()["file"]
-    assert re.fullmatch(r"cabine-\d{8}-\d{6}-5e6f7a8b\.m4a", f)
+    assert f.startswith("cabine-") and f.endswith(f"-{_cid_stem(cid)}.m4a")
+    assert re.fullmatch(r"cabine-\d{8}-\d{6}-[0-9a-f]{8}\.m4a", f)
     stored = exports / f
     assert stored.read_bytes()[4:8] == b"ftyp"
     info = _probe(stored)
@@ -156,7 +157,7 @@ def test_client_id_idempotent(client, exports, tmp_path):
     r1 = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
     assert r1.status_code == 200, r1.text
     f = r1.json()["file"]
-    assert re.fullmatch(r"cabine-\d{8}-\d{6}-3f2b9c1e\.m4a", f)
+    assert re.fullmatch(rf"cabine-\d{{8}}-\d{{6}}-{_cid_stem(cid)}\.m4a", f)
     before = sorted(p.name for p in exports.iterdir())
     # a retry (even with different bytes) returns the existing file, writes nothing
     r2 = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=_wav())
@@ -168,7 +169,7 @@ def test_client_id_idempotent(client, exports, tmp_path):
     r3 = client.post(f"/api/mesa/export?name=cabine&client_id={other}", content=_wav())
     assert r3.status_code == 200
     f3 = r3.json()["file"]
-    assert f3 != f and f3.endswith("-3f2b9c1e.wav")
+    assert f3 != f and f3.endswith(f"-{_cid_stem(other)}.wav")
     # delete removes the file and its sidecars, then the id is free again
     assert client.delete(f"/api/mesa/export/{f}").status_code == 200
     assert not [p for p in exports.iterdir() if p.name.startswith(f)]
@@ -213,3 +214,58 @@ def test_listing_includes_compressed_with_duration(client, exports, tmp_path):
     (exports / f"{webm}.dur").write_text("42.0")
     again = {x["file"]: x for x in client.get("/api/mesa/exports").json()}
     assert again[webm]["dur"] == 42.0
+
+
+def _cid_stem(cid):
+    return server.hashlib.sha256(cid.encode()).hexdigest()[:8]
+
+
+def test_parts_of_one_ride_in_the_same_second_stay_idempotent(client, exports, tmp_path, monkeypatch):
+    """iPhone parts share their first 8 characters (<ride>-1, <ride>-2) and,
+    stored without a transcode, can land in the same second. Each part gets
+    its own stem from a hash of the full id, and a retry of either (its
+    response lost in a tunnel drop) returns the file it already made."""
+    monkeypatch.setattr(server.time, "strftime", lambda fmt, *a: "20261027-120000")
+    ride = "7c1d2e3f-aaaa-4bbb-8ccc-dddddddddddd"
+    data = _encode(tmp_path, "m4a")
+    f1 = client.post(f"/api/mesa/export?name=cabine&client_id={ride}-1", content=data).json()["file"]
+    f2 = client.post(f"/api/mesa/export?name=cabine&client_id={ride}-2", content=data).json()["file"]
+    assert f1 != f2
+    assert f1 == f"cabine-20261027-120000-{_cid_stem(ride + '-1')}.m4a"
+    assert f2 == f"cabine-20261027-120000-{_cid_stem(ride + '-2')}.m4a"
+    before = sorted(p.name for p in exports.iterdir())
+    for cid, f in ((f"{ride}-2", f2), (f"{ride}-1", f1)):
+        r = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
+        assert r.json() == {"file": f}, cid
+    assert sorted(p.name for p in exports.iterdir()) == before
+    # a suffixed name (two different ids whose hashes share 8 chars in one
+    # second) is still found by its retry
+    other = "11111111-2222-4333-8444-555555555555"
+    suffixed = f"cabine-20261027-120000-{_cid_stem(other)}-2.m4a"
+    (exports / suffixed).write_bytes(data)
+    (exports / (suffixed + ".cid")).write_text(other)
+    assert client.post(f"/api/mesa/export?name=cabine&client_id={other}", content=data).json() == {"file": suffixed}
+    # an export made before the hash stems (named by the id's first 8) is found too
+    legacy_id = "abcdef12-0000-4000-8000-000000000001"
+    legacy = "cabine-20261001-090000-abcdef12.m4a"
+    (exports / legacy).write_bytes(data)
+    (exports / (legacy + ".cid")).write_text(legacy_id)
+    assert client.post(f"/api/mesa/export?name=cabine&client_id={legacy_id}", content=data).json() == {"file": legacy}
+
+
+def test_webm_transcode_timeout_is_503_not_400(client, exports, tmp_path, monkeypatch):
+    """A transcode that runs out of time is the server's trouble: 503, so the
+    phone keeps the take queued and retries (a 400 would mark it rejected)."""
+    import subprocess as sp
+    data = _encode(tmp_path, "webm")
+    real = sp.run
+
+    def slow(cmd, *a, **k):
+        if cmd and cmd[0] == "ffmpeg":
+            raise sp.TimeoutExpired(cmd, k.get("timeout", 1))
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(sp, "run", slow)
+    r = client.post("/api/mesa/export?name=cabine&client_id=eeeeeeee-1", content=data)
+    assert r.status_code == 503, r.text
+    assert not exports.exists() or not any(exports.iterdir())

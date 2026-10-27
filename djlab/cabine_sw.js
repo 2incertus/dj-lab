@@ -17,7 +17,7 @@
 // installed phone always gets the new shell.
 
 const VERSION = 1;
-const SHELL_HASH = "41056d1a4fc2777e";
+const SHELL_HASH = "954078b318609b8e";
 const CACHE = `cabine-v${VERSION}`;
 const SHELL = "/static/cabine/cabine.html";
 

@@ -355,8 +355,8 @@ export class Strip {
   }
 
   /** A short message on deck i's text row (refused load). */
-  flash(i, text, now = performance.now()) {
-    this.lanes[i].flash = { text, until: now + FLASH_MS };
+  flash(i, text, now = performance.now(), ms = FLASH_MS) {
+    this.lanes[i].flash = { text, until: now + ms };
     this._keys = {};
   }
 
@@ -649,7 +649,6 @@ export class Strip {
     g.restore();
   }
 
-  /** 0..1 for the board's LED meters (the same ballistics as the strip's). */
   /** REC's tap handler (app.js). */
   onRec(cb) { this._recCb = cb; }
 
@@ -664,6 +663,7 @@ export class Strip {
     this.rec.title = on ? "Stop recording" : "Record the master";
   }
 
+  /** 0..1 for the board's LED meters (the same ballistics as the strip's). */
   meterLevel(c) {
     const m = this.meters[c];
     return m ? meterFraction(m.db) : 0;

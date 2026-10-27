@@ -133,3 +133,52 @@ test("no MediaRecorder format at all: start says so", async () => {
   await assert.rejects(rec.start(), /cannot record/);
   assert.equal(rec.state, "inactive");
 });
+
+test("a chunk that cannot be saved stops the take: flagged incomplete, REC unlit, the app told", async () => {
+  const errors = [];
+  const { store, MR, rec } = await setup(["audio/webm;codecs=opus"], { onerror: (e) => errors.push(e.message) });
+  const append = store.appendChunk.bind(store);
+  let n = 0;
+  store.appendChunk = (id, seq, blob) => (n++ === 0 ? append(id, seq, blob) : Promise.reject(new Error("QuotaExceededError")));
+  await rec.start();
+  MR.made[0].tick([1]);
+  MR.made[0].tick([2]);                          // the quota is full from here on
+  await rec.flushed();
+  await rec.settled();
+  assert.equal(rec.state, "inactive", "REC is not left lit");
+  assert.equal(MR.made[0].state, "inactive");
+  assert.deepEqual(errors, ["QuotaExceededError"]);
+  const [r] = await store.listRecordings();
+  assert.equal(r.done, true);
+  assert.equal(r.incomplete, true);
+  assert.deepEqual([...new Uint8Array(await (await store.recordingBlob(r.id)).arrayBuffer())], [1], "what was flushed is kept");
+});
+
+test("safari: a part switch that fails stops the take with the error surfaced", async () => {
+  const errors = [];
+  const { store, MR, rec, timers } = await setup(["audio/mp4"], { onerror: (e) => errors.push(e.message) });
+  await rec.start();
+  MR.made[0].tick([1]);
+  store.startRecording = () => Promise.reject(new Error("QuotaExceededError"));
+  await timers[0].fn();
+  await rec.settled();
+  assert.equal(rec.state, "inactive");
+  assert.deepEqual(errors, ["QuotaExceededError"]);
+  const [r] = await store.listRecordings();
+  assert.equal(r.id, "ride-0001-1");
+  assert.equal(r.done, true);
+  assert.equal(r.incomplete, true);
+});
+
+test("a failure while REC is being stopped joins that stop", async () => {
+  const { store, MR, rec } = await setup(["audio/webm;codecs=opus"]);
+  store.appendChunk = () => Promise.reject(new Error("QuotaExceededError"));
+  await rec.start();
+  MR.made[0].tick([1]);
+  const [a, b] = await Promise.all([rec.stop(), rec.flushed().then(() => rec.settled())]);
+  assert.equal(a, "ride-0001");
+  assert.equal(rec.state, "inactive");
+  assert.ok(b === undefined || b === "ride-0001");
+  const [r] = await store.listRecordings();
+  assert.equal(r.done, true);
+});
