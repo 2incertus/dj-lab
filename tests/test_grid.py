@@ -23,9 +23,31 @@ def test_fit_flags_rubato():
 def test_compute_grid_on_click_track(wav_file):
     p = wav_file(bpm=128.0, seconds=60, offset_s=0.25)
     g = compute_grid(p)
+    assert g["source"] == "beat_this"              # not a silent librosa fallback
     assert abs(g["bpm"] - 128.0) < 0.05
     assert abs(g["first_beat_s"] - 0.25) < 0.01
     assert abs(g["downbeat_s"] - 0.25) < 0.01      # accents every 4
+
+
+def test_fit_downbeat_phase_from_downbeats():
+    period = 60 / 120.0
+    beats = 0.37 + np.arange(64) * period
+    downbeats = beats[2::4]                          # beat indices 2, 6, 10, ...
+    g = fit_constant_grid(beats, downbeats)
+    assert g["first_beat_s"] == pytest.approx(0.37, abs=1e-3)
+    assert g["downbeat_s"] == pytest.approx(0.37 + 2 * period, abs=1e-3)
+    # without downbeats the default is the first beat: the vote above mattered
+    assert fit_constant_grid(beats, None)["downbeat_s"] == pytest.approx(0.37, abs=1e-3)
+
+
+def test_fit_downbeat_majority_vote_wins():
+    period = 60 / 120.0
+    beats = 0.37 + np.arange(64) * period
+    good = beats[2::4]                               # 16 votes for phase 2
+    bad = beats[[1, 7, 12, 13, 21]]                  # 5 wrong votes (phases 1, 3, 0, 1, 1)
+    downbeats = np.sort(np.concatenate([good, bad]))  # earliest one (beat 1) is wrong
+    g = fit_constant_grid(beats, downbeats)
+    assert g["downbeat_s"] == pytest.approx(0.37 + 2 * period, abs=1e-3)
 
 
 def test_fixes():
