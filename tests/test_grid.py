@@ -111,13 +111,15 @@ def test_sidecar_roundtrip(tmp_path):
     assert load_grid(src) == g
 
 
-def test_librosa_fallback_and_ensure_grid(wav_file, monkeypatch):
+def test_librosa_fallback_and_ensure_grid(wav_file, monkeypatch, capsys):
     def broken():
         raise ImportError("no beat_this here")
     monkeypatch.setattr(grid_mod, "_beat_this", broken)
     p = wav_file(bpm=128.0, seconds=20, offset_s=0.25)
     g = ensure_grid(p)
     assert g["source"] == "librosa"
+    # the fallback is said out loud (inside a job, this lands in its log)
+    assert "beat_this failed, using librosa: no beat_this here" in capsys.readouterr().out
     assert abs(g["bpm"] - 128.0) < 0.5
     assert grid_path(p).exists()
     assert load_grid(p) == g

@@ -201,7 +201,7 @@ def grid_all(folder: str | None = None) -> dict:
             continue
         done += 1
         note = "" if g.get("reliable") else ", unreliable: sync off"
-        print(f"{src.name}: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s{note}",
-              flush=True)
+        print(f"{src.name}: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s, "
+              f"source={g.get('source')}{note}", flush=True)
     print(f"{done} gridded, {failed} failed, {len(todo)} to do", flush=True)
     return {"gridded": done, "failed": failed}

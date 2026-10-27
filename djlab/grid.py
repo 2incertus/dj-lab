@@ -121,7 +121,10 @@ def compute_grid(path: Path) -> Grid:
     try:
         beats, downbeats = _beat_this()(y, BEAT_THIS_SR)
         source = "beat_this"
-    except Exception:
+    except Exception as e:
+        # said out loud: inside a job this is the job's log, so a crate
+        # gridded by librosa (no checkpoint, a model error) is seen
+        print(f"beat_this failed, using librosa: {e}", flush=True)
         beats, downbeats = _librosa_beats(y, BEAT_THIS_SR), None
         source = "librosa"
     g = fit_constant_grid(np.asarray(beats), None if downbeats is None

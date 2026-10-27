@@ -266,8 +266,8 @@ def grid_line(wav: Path) -> str:
     except Exception as e:
         return f"grid: failed ({e})"
     if not g.get("reliable"):
-        return "grid: unreliable, sync off for this track"
-    return f"grid: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s"
+        return f"grid: unreliable, sync off for this track, source={g.get('source')}"
+    return f"grid: {g['bpm']} BPM, beat 1 at {round(float(g['downbeat_s']), 2)}s, source={g.get('source')}"
 
 
 def analyze_into_log(path: Path) -> dict:

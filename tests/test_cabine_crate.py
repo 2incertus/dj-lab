@@ -100,6 +100,9 @@ def test_grid_all_grids_every_analyzed_ungridded_track(crate, client, computed):
     lines = [ln for ln in job["log"].splitlines() if ln.strip()]
     # one line per track it worked on, then a summary
     assert any(ln.startswith("a.wav: 126.0 BPM") for ln in lines), lines
+    # which tracker made each grid is in the log (a silent librosa fallback
+    # would otherwise go unseen)
+    assert any(ln.startswith("a.wav:") and "source=beat_this" in ln for ln in lines), lines
     assert any(ln.startswith("c.wav: 126.0 BPM") for ln in lines), lines
     assert any(ln.startswith("broken.wav: failed (could not decode)") for ln in lines), lines
     assert lines[-1] == "2 gridded, 1 failed, 3 to do", lines
@@ -209,3 +212,11 @@ def test_fake_pull_unknown_url_fails(crate, client, monkeypatch):
         "url": "https://soundcloud.com/someone/not-a-fixture", "folder": "techno"}).json()["job"])
     assert job["status"] == "failed"
     assert "not in the fake intake fixtures" in job["log"]
+
+
+def test_intake_grid_line_names_the_source(monkeypatch, tmp_path):
+    p = tmp_path / "t.wav"
+    monkeypatch.setattr(gr, "ensure_grid", lambda path: dict(FAKE_GRID))
+    assert intake.grid_line(p) == "grid: 126.0 BPM, beat 1 at 0.1s, source=beat_this"
+    monkeypatch.setattr(gr, "ensure_grid", lambda path: dict(FAKE_GRID, reliable=False, source="librosa"))
+    assert intake.grid_line(p) == "grid: unreliable, sync off for this track, source=librosa"
