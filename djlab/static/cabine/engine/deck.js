@@ -11,6 +11,8 @@
 //        Mixxx-specific (SHIFT+PLAY "censor", 4 BEAT as reloop) it is ignored.
 //   [S]  the approved spec's control map (section 5), kept where [M] is silent.
 //   [B]  builder's choice, not stated in any source (touch math, limits).
+//   [R]  rekordbox manual, QUANTIZE ("the beat nearest to where the button
+//        was pressed"), as cited by the F1 review (fairly sure, not re-read).
 //
 // | Control                  | Behavior implemented                                   | Source |
 // |--------------------------|--------------------------------------------------------|--------|
@@ -30,6 +32,9 @@
 // |                          | Lift: back to playing speed (or stays paused).         |        |
 // | SHIFT + jog top turn     | Fast-forward / fast-reverse with extra speed (search). | M, X   |
 // | Jog outer ring turn      | Pitch bend while turning, proportional to speed.       | M      |
+// |                          | Speed is a moving average of the ring's angular        | B (F1) |
+// |                          | velocity (50 ms), held 120 ms after the last event so  |        |
+// |                          | a slow steady drag does not warble.                    |        |
 // | TEMPO slider             | Down = faster. rate = 1 + range * (2 * fader - 1).     | M, S   |
 // | SHIFT + BEAT SYNC        | Tempo range +-6 > +-10 > +-16 > WIDE > +-6.            | M      |
 // | Default tempo range      | +-10 (rekordbox preference default; the manual lists   | S, X   |
@@ -37,12 +42,22 @@
 // | BEAT SYNC                | Matches tempo (BPM) and beatgrid phase to the other    | M      |
 // |                          | deck (the master); stays synced; press again cancels.  |        |
 // |                          | Disabled (no-op, state.noGrid) without a reliable grid.| S      |
+// | BEAT SYNC on the master  | (The other deck follows this one.) This deck's SYNC    | B (F1, |
+// |                          | lights, roles stay: the follower stays synced and this | review:|
+// |                          | slider drives both. Press again: only this light goes  | rb 6/7)|
+// |                          | off. Phase alignment never leaves an active loop.      |        |
+// | TEMPO after SYNC off     | Pass-through takeover: the synced tempo is held, slider| B (F1, |
+// |                          | moves are ignored until the slider's tempo reaches or  | CDJ    |
+// |                          | crosses it, then the slider drives with no jump.       | habit) |
+// |                          | CONFIRM ON HIS RIG.                                    |        |
 // | IN                       | Sets the loop in point (quantized).                    | M      |
 // | OUT                      | Sets the loop out point, loop playback begins.         | M      |
 // | IN / OUT during loop     | Adjust that loop point with the jog wheel (press the   | M (+X  |
 // |                          | same button again to finish).                          | toggle)|
-// | 4 BEAT/EXIT              | No loop: Auto Beat Loop of 4 beats from the beat at    | M      |
-// |                          | the playhead. Loop active: cancel, play continues.     |        |
+// | 4 BEAT/EXIT              | No loop: Auto Beat Loop of 4 beats from the beat       | M, R   |
+// |                          | NEAREST the playhead (rekordbox QUANTIZE: "the beat    |        |
+// |                          | nearest to where the button was pressed"); an IN just  |        |
+// |                          | ahead is reached by playing on. Loop active: cancel.   |        |
 // | SHIFT + 4 BEAT/EXIT      | Active Loop: arms / cancels the saved loop (a loop hot | M      |
 // |                          | cue here) nearest the playhead; playback loops when it |        |
 // |                          | reaches that loop's in point.                          |        |
@@ -57,8 +72,9 @@
 // |                          | beats (rekordbox default order). Phase kept.           |        |
 // | SHIFT + BEAT JUMP pad 7/8| Halve / double the beats on every pad (1/8 to 64).     | M (lim-|
 // |                          |                                                        | its B) |
-// | BEAT LOOP (SHIFT + BEAT  | Pads 1/4, 1/2, 1, 2, 4, 8, 16, 32 beats; the same pad  | M      |
-// | JUMP mode)               | again cancels the loop.                                |        |
+// | BEAT LOOP (SHIFT + BEAT  | Pads 1/4, 1/2, 1, 2, 4, 8, 16, 32 beats from the beat  | M, R   |
+// | JUMP mode)               | nearest the playhead (sub-beat pads: the nearest 1/4 or|        |
+// |                          | 1/2); the same pad again cancels the loop.             |        |
 // | SHIFT                    | Held, per deck.                                        | M, S   |
 //
 // Changed from spec:
@@ -84,16 +100,19 @@
 //   playing keeps the beat phase (jumps to cue + current beat fraction).
 // - Beat jump during an active loop moves the loop with the playhead.
 // - Calling a point hot cue during a loop exits the loop.
-// - On a synced deck the TEMPO slider is ignored until sync is cancelled;
-//   cancelling keeps the synced tempo until the slider moves again.
+// - On a following deck the TEMPO slider is ignored until sync is cancelled;
+//   cancelling holds the synced tempo until the slider crosses it (pass-
+//   through takeover, F1; the earlier "jump on the first move" was wrong).
 // - Changing the tempo range keeps the slider position (tempo rescales).
 // - Jog math: 1 turn = 1.8 s of audio (33 1/3 rpm); fast search = 16x;
 //   pitch bend = 10 % per turn per second, capped at +-30 %; loop adjust
 //   = 0.5 s per turn.
+// - Roll keeps the floor (it records from now); auto loops use the nearest beat.
 //
 // Time model. The deck never reads audio; it keeps an anchor {s, t, rate}:
 // "at audio-clock time t the playhead was at s seconds, moving at rate".
-// posAt(T) extrapolates it (wrapping at an armed loop's OUT). The voice's
+// posAt(T) extrapolates it (wrapping inside an armed loop both ways, as the
+// worklet does). The voice's
 // position reports (the worklet posts one every 32 render quanta) re-anchor
 // it, except reports older than a jump the deck has scheduled. Jumps that
 // must keep the beat (sync, beat jump, quantized hot cues) are scheduled
@@ -141,7 +160,8 @@ const SCRATCH_TAU_S = 0.03;          // the record closes the gap to the finger 
 const SCRATCH_TICK_MS = 15;
 const SCRATCH_DONE_S = 0.0005;
 const MAX_SCRATCH_RATE = 16;
-const BEND_HOLD_MS = 60;
+const BEND_HOLD_MS = 120;           // a slow ring drag sends events up to ~100 ms apart
+const BEND_EMA_TAU_S = 0.05;         // smoothing of the ring's angular velocity
 const MIN_LOOP_S = 0.01;
 
 /** Every control-map action; Task 9's flx4-map names must resolve here. */
@@ -156,12 +176,18 @@ export const DECK_ACTIONS = [
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const emptyLoop = () => ({ in: null, out: null, active: false, beats: null, pad: null, adjust: null });
 
-/** Where an anchor {s, t, rate} puts the playhead at T, wrapping at the OUT
- *  of loop L when it is active (forward play only), clamped to [0, dur]. */
+/** Where an anchor {s, t, rate} puts the playhead at T, wrapping inside loop
+ *  L when it is active as the worklet does: forward across OUT back to IN,
+ *  backward (scratch) across IN back to OUT. Clamped to [0, dur]. */
 function extrapolate(a, L, T, dur) {
   let s = a.s + (T - a.t) * a.rate;
-  if (L && L.active && a.rate > 0 && a.s < L.out && s >= L.out) {
-    s = L.in + ((s - L.out) % (L.out - L.in));
+  if (L && L.active && L.out > L.in) {
+    const len = L.out - L.in;
+    if (a.rate > 0 && a.s < L.out && s >= L.out) {
+      s = L.in + ((s - L.out) % len);
+    } else if (a.rate < 0 && a.s >= L.in && a.s < L.out && s < L.in) {
+      s = L.out - ((L.in - s) % len);
+    }
   }
   return clamp(s, 0, dur);
 }
@@ -207,6 +233,7 @@ export class Deck {
     this._master = null;
     this._followers = new Set();
     this._bend = 0;
+    this._bendVel = 0;                 // smoothed ring speed, turns per second
     this._bendT = -Infinity;
     this._bendTimer = null;
     this._scratchRate = 0;
@@ -259,6 +286,7 @@ export class Deck {
     this._syncRate = null;
     this._heldRate = null;
     this._bend = 0;
+    this._bendVel = 0;
     this._scratchRate = 0;
     this._cueLatch = false;
     this._roll = null;
@@ -436,14 +464,20 @@ export class Deck {
     if (!st.loaded || !deltaDeg) return;
     if (st.loop.adjust) { this._adjustLoop(deltaDeg); return; }
     const T = this.now();
-    const dt = clamp(T - this._bendT, 1 / 120, 0.1);
+    const dt = clamp(T - this._bendT, 1 / 120, BEND_HOLD_MS / 1000);
     this._bendT = T;
-    this._bend = clamp((deltaDeg / 360 / dt) * BEND_PER_TURN_PER_S, -MAX_BEND, MAX_BEND);
+    const vel = deltaDeg / 360 / dt;                       // turns per second
+    // a fresh turn starts at its own speed; a continuing one is smoothed
+    // (EMA), so uneven touch-event spacing does not warble the pitch
+    this._bendVel = this._bendTimer === null ? vel
+      : this._bendVel + (1 - Math.exp(-dt / BEND_EMA_TAU_S)) * (vel - this._bendVel);
+    this._bend = clamp(this._bendVel * BEND_PER_TURN_PER_S, -MAX_BEND, MAX_BEND);
     this._applyRate();
     this._stopTimer("_bendTimer");
     this._bendTimer = this._setTimeout(() => {
       this._bendTimer = null;
       this._bend = 0;
+      this._bendVel = 0;
       this._applyRate();
     }, BEND_HOLD_MS);
   }
@@ -451,8 +485,15 @@ export class Deck {
   // ---- tempo and sync -----------------------------------------------------------------
 
   setTempo(fader01) {
+    const prev = this._sliderRate();
     this._fader = clamp(Number(fader01) || 0, 0, 1);
-    if (this.state.syncOn) return;          // a synced deck follows its master
+    if (this._master) return;               // a following deck follows its master
+    if (this._heldRate !== null) {
+      // pass-through takeover: the held (synced) tempo stays until the
+      // slider's own tempo reaches or crosses it, then the slider drives
+      const h = this._heldRate;
+      if ((prev - h) * (this._sliderRate() - h) > 0) return;
+    }
     this._heldRate = null;
     this._tempoChanged();
   }
@@ -461,7 +502,7 @@ export class Deck {
     const st = this.state;
     const i = TEMPO_RANGES.indexOf(st.range);
     st.range = TEMPO_RANGES[(i + 1) % TEMPO_RANGES.length];
-    if (st.syncOn || this._heldRate !== null) return;
+    if (this._master || this._heldRate !== null) return;
     this._tempoChanged();
   }
 
@@ -470,7 +511,10 @@ export class Deck {
     if (!st.loaded) return;
     if (st.syncOn) { this._unsync(); return; }
     if (st.noGrid || !other || !other.state || !other.state.loaded || other.state.noGrid) return;
-    if (other._master === this) other._unsync();          // no sync loops: A follows B follows A
+    if (other._master === this) {             // SYNC on the master: light it, roles stay
+      st.syncOn = true;
+      return;
+    }
     this._master = other;
     other._followers.add(this);
     st.syncOn = true;
@@ -514,7 +558,19 @@ export class Deck {
     const ph = phaseAt(m.grid, m.posAt(T));
     const bi = beatIndexAt(this.grid, s);
     const n = Math.round(bi - ph) + ph;
-    return clamp(timeOfBeat(this.grid, n), 0, this._duration);
+    return clamp(this._intoLoop(timeOfBeat(this.grid, n)), 0, this._duration);
+  }
+
+  /** A target outside this deck's active loop, moved into [in, out) by
+   *  whole beats (phase kept); a loop under a beat long wraps by its length. */
+  _intoLoop(t) {
+    const L = this.state.loop;
+    if (!L.active || !(L.out > L.in) || (t >= L.in && t < L.out)) return t;
+    const p = beatPeriod(this.grid);
+    const byBeats = t - Math.floor((t - L.in) / p) * p;
+    if (byBeats >= L.in && byBeats < L.out) return byBeats;
+    const len = L.out - L.in;
+    return L.in + ((((t - L.in) % len) + len) % len);
   }
 
   // ---- loops ------------------------------------------------------------------------
@@ -549,7 +605,7 @@ export class Deck {
     const p = this._beatLen();
     if (!p) return;
     const T = this.now();
-    const inS = this._floorTo(this.posAt(T), 1);
+    const inS = this._roundTo(this.posAt(T), 1);            // QUANTIZE: the nearest beat
     this._engageLoop(inS, inS + 4 * p, T, { wrapNow: true, beats: 4 });
   }
 
@@ -598,7 +654,7 @@ export class Deck {
     const p = this._beatLen();
     if (!p) return;
     const T = this.now();
-    const inS = L.active && L.pad !== null ? L.in : this._floorTo(this.posAt(T), Math.min(beats, 1));
+    const inS = L.active && L.pad !== null ? L.in : this._roundTo(this.posAt(T), Math.min(beats, 1));
     this._engageLoop(inS, inS + beats * p, T, { wrapNow: true, beats, pad: i });
   }
 
@@ -792,6 +848,11 @@ export class Deck {
   _baseRate() {
     if (this._syncRate !== null) return this._syncRate;
     if (this._heldRate !== null) return this._heldRate;
+    return this._sliderRate();
+  }
+
+  /** The TEMPO slider's own tempo (what it would set if it drove the deck). */
+  _sliderRate() {
     return 1 + (this.state.range / 100) * (2 * this._fader - 1);
   }
 
@@ -852,9 +913,11 @@ export class Deck {
     return this.state.quantize && !this.state.noGrid ? quantize(this.grid, s) : s;
   }
 
-  _floorTo(s, unit) {
+  /** Nearest multiple of `unit` beats (auto loops: QUANTIZE snaps to the
+   *  beat nearest the press). Unquantized or gridless: s unchanged. */
+  _roundTo(s, unit) {
     if (!this.state.quantize || this.state.noGrid) return s;
-    const n = Math.floor(beatIndexAt(this.grid, s) / unit + 1e-9) * unit;
+    const n = Math.round(beatIndexAt(this.grid, s) / unit) * unit;
     return timeOfBeat(this.grid, n);
   }
 

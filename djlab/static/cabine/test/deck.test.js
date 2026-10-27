@@ -255,10 +255,66 @@ test("sync_follows_master_tempo_and_cancels", () => {
   B.syncPress(A);                              // cancel
   assert.equal(B.state.syncOn, false);
   assert.ok(near(B.effectiveBpm(), 140.8), "cancel keeps the synced tempo");
+  B.setTempo(0.9);                             // 1.08 crosses the held 140.8 / 131 = 1.0748
   B.setTempo(0.5);
   assert.ok(near(vB.rate, 1.0), "slider takes over again");
   A.setTempo(0.5);
   assert.ok(near(vB.rate, 1.0), "no longer follows");
+});
+
+test("sync_on_the_master_keeps_the_follower_synced", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  B.syncPress(A);                              // B follows A
+  A.syncPress(B);                              // SYNC on the master: its light comes on, roles stay
+  assert.equal(A.state.syncOn, true, "A's SYNC lights");
+  assert.equal(B.state.syncOn, true, "B is still synced");
+  assert.equal(B._master, A, "B still follows A");
+  assert.equal(A._master, null, "A follows nobody");
+  A.setTempo(1);                               // A's slider still drives both
+  assert.ok(near(A.effectiveBpm(), 140.8), `A ${A.effectiveBpm()}`);
+  assert.ok(near(B.effectiveBpm(), 140.8), `B follows: ${B.effectiveBpm()}`);
+  B.setTempo(0.1);                             // B's slider stays dead
+  assert.ok(near(B.effectiveBpm(), 140.8));
+  A.syncPress(B);                              // second press: only A's light goes off
+  assert.equal(A.state.syncOn, false);
+  assert.equal(B.state.syncOn, true);
+  A.setTempo(0.5);
+  assert.ok(near(A.effectiveBpm(), 128), "A's slider is live, no held rate on the master");
+  assert.ok(near(B.effectiveBpm(), 128), "B still follows A");
+  assert.ok(near(vB.rate, 128 / 131));
+});
+
+test("tempo_slider_takes_over_only_when_it_crosses_the_held_rate", () => {
+  const { vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  B.setTempo(0.5);
+  B.syncPress(A);
+  A.setTempo(0.75);                            // A at 128 * 1.05 = 134.4
+  const held = 134.4 / 131;                    // 1.02595 on B
+  B.syncPress(A);                              // unsync: B holds the synced rate
+  assert.ok(near(vB.rate, held), `held ${vB.rate}`);
+  for (const f of [0.52, 0.55, 0.6, 0.62]) {   // slider rates 1.004 .. 1.024: below the held rate
+    B.setTempo(f);
+    assert.ok(near(vB.rate, held), `slider at ${f} must not move the tempo (${vB.rate})`);
+    assert.ok(near(B.effectiveBpm(), 134.4));
+  }
+  B.setTempo(0.4);                             // moving away does nothing either
+  assert.ok(near(vB.rate, held));
+  B.setTempo(0.63);                            // 1.026: crosses 1.02595, takes over
+  assert.ok(near(vB.rate, 1.026), `takeover at the slider value: ${vB.rate}`);
+  assert.ok(Math.abs(vB.rate - held) < 0.0002, "no jump at the takeover");
+  B.setTempo(0.6);
+  assert.ok(near(vB.rate, 1.02), "the slider drives from now on");
+  // crossing from above
+  B.syncPress(A);
+  A.setTempo(0.25);                            // A at 128 * 0.95 = 121.6
+  B.syncPress(A);
+  const held2 = 121.6 / 131;
+  B.setTempo(0.5);                             // 1.0: still above 0.928
+  assert.ok(near(vB.rate, held2));
+  B.setTempo(0.1);                             // 0.92: crossed
+  assert.ok(near(vB.rate, 0.92));
 });
 
 test("deck_no_grid_disables_sync", () => {
@@ -298,6 +354,36 @@ test("four_beat_loop_and_exit", () => {
   assert.equal(d.state.loop.active, false);
   assert.deepEqual(v.loop, [null, null]);
   assert.equal(d.state.playing, true, "exit keeps playing");
+});
+
+test("four_beat_loop_pressed_just_before_the_beat_starts_on_that_beat", () => {
+  const { c, v, d } = setup(grid(120));        // beats every 0.5 s: beat 4 at 2.0
+  d.playPause();
+  c.t = 1; v.report(1.96, 1);                  // 40 ms before beat 4
+  d.fourBeatExit();
+  assert.deepEqual([d.state.loop.in, d.state.loop.out], [2.0, 4.0], "IN on the nearest beat");
+  assert.deepEqual(v.loop, [2.0, 4.0]);
+  assert.ok(near(d.posAt(1.1), 2.06), "playback runs into the loop, no jump");
+  d.fourBeatExit();
+  c.t = 2; v.report(2.04, 2);                  // 40 ms after beat 4
+  d.fourBeatExit();
+  assert.deepEqual([d.state.loop.in, d.state.loop.out], [2.0, 4.0]);
+});
+
+test("beat_loop_pads_start_on_the_nearest_beat", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.t = 1; v.report(1.96, 1);
+  d.beatLoop(3);                               // 2 beats
+  assert.deepEqual(v.loop, [2.0, 3.0]);
+  d.beatLoop(3);
+  c.t = 2; v.report(2.04, 2);
+  d.beatLoop(4);                               // 4 beats
+  assert.deepEqual(v.loop, [2.0, 4.0]);
+  d.beatLoop(4);
+  c.t = 3; v.report(2.11, 3);                  // 1/4 beat pad: nearest quarter (2.125)
+  d.beatLoop(0);
+  assert.deepEqual(v.loop, [2.125, 2.25]);
 });
 
 test("halve_double_only_with_loop", () => {
@@ -501,6 +587,23 @@ test("jog_ring_nudges_only_while_turning", () => {
   assert.ok(near(v.rate, 1.0));
 });
 
+test("slow_ring_drag_bends_continuously", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.advance(1);
+  const rates = [];
+  for (let e = 0; e < 12; e++) {               // a slow steady drag: 9 deg every 90 ms
+    d.jogRing(9);
+    for (let k = 0; k < 9; k++) { c.advance(0.01); rates.push(v.rate); }
+  }
+  const steady = rates.slice(27);              // after the first few events
+  assert.ok(steady.every((r) => r > 1.0), `the bend dropped to zero between events: ${Math.min(...steady)}`);
+  const lo = Math.min(...steady), hi = Math.max(...steady);
+  assert.ok(hi - lo < 0.2 * (hi - 1), `warble: bend between ${lo} and ${hi}`);
+  c.advance(0.2);
+  assert.ok(near(v.rate, 1.0), `released ${v.rate}`);
+});
+
 test("shift_jog_top_is_fast_search", () => {
   const { v, d } = setup(grid(120));
   d.playPause();
@@ -510,6 +613,37 @@ test("shift_jog_top_is_fast_search", () => {
   assert.ok(near(v.lastSeek().s, 10 + 1.8 * 16), `search ${v.lastSeek().s}`);
   d.setShift(false);
   assert.equal(d.state.shift, false);
+});
+
+test("backward_scratch_wraps_across_loop_in", () => {
+  const { c, v, d } = setup(grid(120));
+  d.playPause();
+  c.t = 1; v.report(10.1, 1);
+  d.fourBeatExit();                            // loop 10 .. 12
+  d.jogTouch(true);
+  d.jogTurn(-72);                              // target 0.36 s back: the record runs backwards fast
+  assert.ok(v.rate < 0, `rate ${v.rate}`);
+  const r = v.rate;
+  c.t = 1.01;                                  // no timer fires: one 10 ms step on the anchor
+  const want = 12 - (10 - (10.1 + 0.01 * r));  // the worklet wraps at IN back to OUT
+  assert.ok(near(d.posAt(), want, 1e-9), `posAt ${d.posAt()}, want ${want}`);
+});
+
+test("sync_alignment_stays_inside_the_followers_loop", () => {
+  const gA = grid(120, 0), gB = grid(120, 0);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause(); B.playPause();
+  vB.report(10.1, 0);
+  B.fourBeatExit();                            // B loops 10 .. 12
+  c.t = 3;
+  vA.report(10.125, 3);                        // A at phase 0.25
+  vB.report(11.9, 3);                          // B near its loop OUT
+  B.syncPress(A);
+  const { s, at } = vB.lastSeek();
+  assert.ok(s >= 10 && s < 12, `aligned target ${s} is outside the loop [10, 12)`);
+  const aAt = 10.125 + (at - 3);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
 });
 
 // ---- roll (Beat FX "Roll", ruling R3) ---------------------------------------
