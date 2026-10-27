@@ -5,12 +5,43 @@
 export const PROCESSOR_URL = "/static/cabine/engine/deck-processor.js";
 
 const modules = new WeakMap();
+/** How each context got its module: "direct" or "blob" (tests, the phone). */
+export const workletLoads = new WeakMap();
 
-/** addModule once per context. */
-export function registerDeckProcessor(ctx, url = PROCESSOR_URL) {
+/** addModule once per context. Offline, WebKit's addModule may bypass the
+ *  service worker and fail; then the source is fetched as text (the service
+ *  worker answers from its cache) and loaded from a blob: URL. The processor
+ *  imports nothing, so a blob URL runs it as is. A failed registration is
+ *  not kept, so the next tap tries again. */
+export function registerDeckProcessor(ctx, url = PROCESSOR_URL, env = {}) {
   let p = modules.get(ctx);
   if (!p) {
-    p = ctx.audioWorklet.addModule(url);
+    const fetchFn = env.fetch || ((...a) => globalThis.fetch(...a));
+    const URLs = env.URL || globalThis.URL;
+    p = (async () => {
+      try {
+        await ctx.audioWorklet.addModule(url);
+        workletLoads.set(ctx, "direct");
+        return;
+      } catch (direct) {
+        let src;
+        try {
+          const r = await fetchFn(url);
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          src = await r.text();
+        } catch (e) {
+          throw direct;
+        }
+        const blobUrl = URLs.createObjectURL(new Blob([src], { type: "text/javascript" }));
+        try {
+          await ctx.audioWorklet.addModule(blobUrl);
+        } finally {
+          try { URLs.revokeObjectURL(blobUrl); } catch (e) { /* fine */ }
+        }
+        workletLoads.set(ctx, "blob");
+      }
+    })();
+    p.catch(() => { if (modules.get(ctx) === p) modules.delete(ctx); });
     modules.set(ctx, p);
   }
   return p;

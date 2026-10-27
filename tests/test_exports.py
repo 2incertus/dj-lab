@@ -66,18 +66,72 @@ def test_wav_export_unchanged(client, exports):
     assert client.post("/api/mesa/export?name=x", content=b"nope" * 10).status_code == 400
 
 
-def test_webm_and_m4a_accepted(client, exports, tmp_path):
-    for ext, mime in (("webm", "audio/webm"), ("m4a", "audio/mp4")):
-        data = _encode(tmp_path, ext)
-        r = client.post("/api/mesa/export?name=cabine", content=data)
-        assert r.status_code == 200, r.text
-        f = r.json()["file"]
-        assert re.fullmatch(rf"cabine-\d{{8}}-\d{{6}}\.{ext}", f)
-        assert (exports / f).read_bytes() == data
-        g = client.get(f"/api/mesa/export/{f}")
-        assert g.status_code == 200
-        assert g.headers["content-type"] == mime
-        assert g.content == data
+def _probe(path):
+    """codec name and duration of a stored export, via ffprobe."""
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0",
+                          "-show_entries", "stream=codec_name,bit_rate:format=duration,format_name",
+                          "-of", "default=nw=1", str(path)],
+                         check=True, capture_output=True, text=True).stdout
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def test_m4a_stored_as_is(client, exports, tmp_path):
+    data = _encode(tmp_path, "m4a")
+    r = client.post("/api/mesa/export?name=cabine", content=data)
+    assert r.status_code == 200, r.text
+    f = r.json()["file"]
+    assert re.fullmatch(r"cabine-\d{8}-\d{6}\.m4a", f)
+    assert (exports / f).read_bytes() == data
+    g = client.get(f"/api/mesa/export/{f}")
+    assert g.status_code == 200
+    assert g.headers["content-type"] == "audio/mp4"
+    assert g.content == data
+
+
+def test_webm_upload_is_stored_as_m4a(client, exports, tmp_path):
+    """A WebM/Opus take (the Galaxy's MediaRecorder) becomes AAC in M4A, so
+    tocar works on the iPhone; a retry with the same client id gets it back."""
+    data = _encode(tmp_path, "webm", 2.0)
+    assert data[:4] == b"\x1a\x45\xdf\xa3"
+    cid = "5e6f7a8b-1111-4222-8333-444455556666"
+    r = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
+    assert r.status_code == 200, r.text
+    f = r.json()["file"]
+    assert re.fullmatch(r"cabine-\d{8}-\d{6}-5e6f7a8b\.m4a", f)
+    stored = exports / f
+    assert stored.read_bytes()[4:8] == b"ftyp"
+    info = _probe(stored)
+    assert info["codec_name"] == "aac"
+    assert 120_000 <= int(info["bit_rate"]) <= 200_000, info
+    assert float(info["duration"]) == pytest.approx(2.0, abs=0.1)
+    # nothing of the webm is left behind, and the sidecar names the m4a
+    names = sorted(p.name for p in exports.iterdir())
+    assert names == [f, f + ".cid"], names
+    assert (exports / (f + ".cid")).read_text() == cid
+    g = client.get(f"/api/mesa/export/{f}")
+    assert g.headers["content-type"] == "audio/mp4"
+    listing = {x["file"]: x for x in client.get("/api/mesa/exports").json()}
+    assert listing[f]["dur"] == pytest.approx(2.0, abs=0.1)
+    # the retry returns the m4a, writes nothing
+    before_retry = sorted(p.name for p in exports.iterdir())
+    r2 = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
+    assert r2.json() == {"file": f}
+    assert sorted(p.name for p in exports.iterdir()) == before_retry
+    # a streamed webm (MediaRecorder: no duration in the header) transcodes too
+    streamed = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi",
+                               "-i", "sine=frequency=330:duration=3", "-ac", "2",
+                               "-c:a", "libopus", "-f", "webm", "pipe:1"],
+                              check=True, capture_output=True).stdout
+    live = client.post("/api/mesa/export?name=cabine&client_id=cccccccc-3",
+                       content=streamed).json()["file"]
+    assert live.endswith(".m4a")
+    assert float(_probe(exports / live)["duration"]) == pytest.approx(3.0, abs=0.1)
+    # a webm ffmpeg cannot read is refused, nothing written
+    before = sorted(p.name for p in exports.iterdir())
+    bad = client.post("/api/mesa/export?name=cabine&client_id=dddddddd-4",
+                      content=b"\x1a\x45\xdf\xa3" + b"garbage" * 50)
+    assert bad.status_code == 400
+    assert sorted(p.name for p in exports.iterdir()) == before
 
 
 def test_unknown_format_400(client, exports):
@@ -102,14 +156,13 @@ def test_client_id_idempotent(client, exports, tmp_path):
     r1 = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=data)
     assert r1.status_code == 200, r1.text
     f = r1.json()["file"]
-    assert re.fullmatch(r"cabine-\d{8}-\d{6}-3f2b9c1e\.webm", f)
+    assert re.fullmatch(r"cabine-\d{8}-\d{6}-3f2b9c1e\.m4a", f)
     before = sorted(p.name for p in exports.iterdir())
     # a retry (even with different bytes) returns the existing file, writes nothing
     r2 = client.post(f"/api/mesa/export?name=cabine&client_id={cid}", content=_wav())
     assert r2.status_code == 200
     assert r2.json() == {"file": f}
     assert sorted(p.name for p in exports.iterdir()) == before
-    assert (exports / f).read_bytes() == data
     # same first 8 chars but a different full id is a different recording
     other = "3f2b9c1e-0000-4000-8000-000000000000"
     r3 = client.post(f"/api/mesa/export?name=cabine&client_id={other}", content=_wav())
@@ -136,11 +189,18 @@ def test_listing_includes_compressed_with_duration(client, exports, tmp_path):
                               check=True, capture_output=True).stdout
     live = client.post("/api/mesa/export?name=cabine&client_id=cccccccc-3",
                        content=streamed).json()["file"]
+    # uploads of webm are stored as m4a now; a webm already on disk (from
+    # before the transcode) still lists and plays
+    assert webm.endswith(".m4a") and live.endswith(".m4a")
+    legacy = "cabine-20260101-000001.webm"
+    (exports / legacy).write_bytes(streamed)
     # a broken compressed file must not break the listing
     (exports / "broken-20260101-000000.webm").write_bytes(b"\x1a\x45\xdf\xa3garbage")
     listing = client.get("/api/mesa/exports").json()
     by = {x["file"]: x for x in listing}
-    assert set(by) == {w, webm, m4a, live, "broken-20260101-000000.webm"}
+    assert set(by) == {w, webm, m4a, live, legacy, "broken-20260101-000000.webm"}
+    assert by[legacy]["dur"] == pytest.approx(2.0, abs=0.15)
+    assert client.get(f"/api/mesa/export/{legacy}").headers["content-type"] == "audio/webm"
     assert not any(n.endswith((".dur", ".cid")) for n in by)
     assert by[w]["dur"] == 2.0
     assert by[webm]["dur"] == pytest.approx(1.5, abs=0.15)

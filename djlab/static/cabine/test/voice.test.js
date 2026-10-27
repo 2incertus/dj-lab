@@ -102,3 +102,38 @@ test("voice_unload_sends_an_empty_load_and_the_worklet_drops_the_pcm", () => {
   p.process([], out);
   assert.ok(out[0][0].every((x) => x === 0), "an unloaded deck is silent");
 });
+
+// ---- Task 11: the worklet module loads offline ------------------------------------
+
+test("registerDeckProcessor falls back to the cached source as a blob URL", async () => {
+  const { registerDeckProcessor, PROCESSOR_URL, workletLoads } = await import("../engine/deck-voice.js");
+  const tried = [];
+  // WebKit's addModule may skip the service worker: offline the direct load fails
+  const ctx = { audioWorklet: { addModule: async (u) => { tried.push(u); if (!u.startsWith("blob:")) throw new Error("network"); } } };
+  const fetched = [];
+  const fetchFn = async (u) => { fetched.push(u); return new Response("registerProcessor('cabine-deck', class {});"); };
+  const made = [];
+  const urls = { createObjectURL: (b) => { made.push(b); return "blob:cabine-1"; }, revokeObjectURL: () => {} };
+  await registerDeckProcessor(ctx, PROCESSOR_URL, { fetch: fetchFn, URL: urls });
+  assert.deepEqual(tried, [PROCESSOR_URL, "blob:cabine-1"]);
+  assert.deepEqual(fetched, [PROCESSOR_URL]);
+  assert.equal(made[0].type, "text/javascript");
+  assert.equal(await made[0].text(), "registerProcessor('cabine-deck', class {});");
+  assert.equal(workletLoads.get(ctx), "blob");
+  // once per context
+  await registerDeckProcessor(ctx, PROCESSOR_URL, { fetch: fetchFn, URL: urls });
+  assert.equal(tried.length, 2);
+
+  // the direct load is used when it works
+  const ok = { audioWorklet: { addModule: async () => {} } };
+  await registerDeckProcessor(ok, PROCESSOR_URL, { fetch: fetchFn, URL: urls });
+  assert.equal(workletLoads.get(ok), "direct");
+
+  // both fail: the error surfaces (the app says "tap again") and a retry may try again
+  const bad = { audioWorklet: { addModule: async () => { throw new Error("nope"); } } };
+  await assert.rejects(registerDeckProcessor(bad, PROCESSOR_URL, { fetch: async () => { throw new TypeError("offline"); }, URL: urls }));
+  let calls = 0;
+  bad.audioWorklet.addModule = async () => { calls++; };
+  await registerDeckProcessor(bad, PROCESSOR_URL, { fetch: fetchFn, URL: urls });
+  assert.equal(calls, 1, "a failed registration is not cached");
+});

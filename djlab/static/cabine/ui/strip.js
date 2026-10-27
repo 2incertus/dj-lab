@@ -9,7 +9,9 @@
 //   (100 per second) with the playhead in the middle, beat ticks and bar lines
 //   from the grid, hot cue markers in the pad colours and the loop region
 //   tinted. At the right: the Beat FX name, fraction and ON state, the two
-//   channel meters with peak hold, and REC (Task 11 wires it; drawn disabled).
+//   channel meters with peak hold, and REC (app.js wires it to
+//   engine/recorder.js: setRec(on, seconds) lights it red with mm:ss,
+//   onRec(cb) gets the taps).
 //
 // Read-only (anti-goal): nothing on the waveform answers a touch. The only
 // interactive things on the strip are the board's "caixa" button, REC, and
@@ -49,6 +51,13 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
 // ---- pure helpers (unit-tested) ----------------------------------------------------
+
+/** REC's label: "REC" idle, the elapsed "mm:ss" while recording. */
+export function recLabel(on, seconds) {
+  if (!on) return "REC";
+  const s = Math.max(0, Math.floor(seconds || 0));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
 
 /** The server's peaks file: "PK01" | uint32 LE rate | uint32 LE n | n x uint8. */
 export function parsePeaks(buf) {
@@ -209,9 +218,13 @@ export class Strip {
     this.rec = document.createElement("button");
     this.rec.type = "button";
     this.rec.className = "cab-strip-rec";
-    this.rec.disabled = true;
     this.rec.textContent = "REC";
-    this.rec.title = "Recording comes in the next build";
+    this.rec.title = "Record the master";
+    this.rec.setAttribute("aria-pressed", "false");
+    this._recShown = "REC";
+    this._recCb = null;
+    this._onRec = (e) => { e.preventDefault(); if (this._recCb) this._recCb(); };
+    this.rec.addEventListener("click", this._onRec);
     slot.appendChild(this.rec);
 
     // the list scrolls with a finger (the board cancels native scrolling)
@@ -637,6 +650,20 @@ export class Strip {
   }
 
   /** 0..1 for the board's LED meters (the same ballistics as the strip's). */
+  /** REC's tap handler (app.js). */
+  onRec(cb) { this._recCb = cb; }
+
+  /** REC lit red with the elapsed mm:ss while recording; DOM touched on change only. */
+  setRec(on, seconds = 0) {
+    const label = recLabel(on, seconds);
+    if (label === this._recShown) return;
+    this._recShown = label;
+    this.rec.textContent = label;
+    this.rec.classList.toggle("cab-on", !!on);
+    this.rec.setAttribute("aria-pressed", String(!!on));
+    this.rec.title = on ? "Stop recording" : "Record the master";
+  }
+
   meterLevel(c) {
     const m = this.meters[c];
     return m ? meterFraction(m.db) : 0;
@@ -649,6 +676,7 @@ export class Strip {
     this.list.removeEventListener("pointerup", this._onUp);
     this.list.removeEventListener("pointercancel", this._onUp);
     this.list.remove();
+    this.rec.removeEventListener("click", this._onRec);
     this.rec.remove();
   }
 }

@@ -4,6 +4,7 @@ Single-worker job model: renders and analysis are CPU-heavy, so one job
 runs at a time and its stdout is captured live for the UI console.
 """
 
+import asyncio
 import contextlib
 import hashlib
 import io
@@ -32,8 +33,11 @@ STATIC = Path(__file__).parent / "static"
 # carries the hash itself. Empty PIN_HASH disables auth for local dev.
 PIN_HASH = os.getenv("PIN_HASH", "")
 # the installed Cabine app must reach its service worker and manifest
-# before the PIN: browsers fetch both without cookies
-UNGATED = ("/login", "/auth", "/health", "/cabine/sw.js", "/cabine/manifest.webmanifest")
+# before the PIN: browsers fetch both without cookies. The Cabine shell is
+# public too (it holds no data): a fresh home-screen install has its own
+# cookie jar, so the PIN card lives inside the app and shows on a 401.
+UNGATED = ("/login", "/auth", "/health", "/cabine", "/cabine/sw.js",
+           "/cabine/manifest.webmanifest")
 
 _SAFE_NEXT = re.compile(r"/(?![/\\])[^\x00-\x20\x7f\\]*")
 
@@ -56,7 +60,7 @@ async def pin_gate(request: Request, call_next):
         return await call_next(request)
     if path.startswith(("/api/", "/audio/")):
         return JSONResponse({"detail": "auth required"}, status_code=401)
-    if path == "/cabine" or path.startswith("/cabine/"):
+    if path.startswith("/cabine/"):                   # the proof page
         return RedirectResponse(f"/login?next={safe_next(path)}", status_code=307)
     return RedirectResponse("/login", status_code=307)
 
@@ -284,6 +288,25 @@ def _export_duration(f: Path, st):
     return round(d, 1)
 
 
+WEBM_TO_M4A = ["-vn", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+
+
+def _webm_to_m4a(src: Path, dest: Path) -> bool:
+    """Transcode a WebM/Opus take to AAC 160k in M4A (the iPhone plays it
+    from O Arquivo; Safari's WebM support is uneven). False if ffmpeg can't."""
+    import subprocess
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(src),
+                            *WEBM_TO_M4A, "-f", "mp4", str(dest)],
+                           capture_output=True, timeout=900)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+
+
+_upload_locks: dict = {}
+
+
 def _export_by_client_id(cid: str):
     """The export a previous upload with this exact client_id produced."""
     for side in MESA_EXPORTS.glob(f"*-{cid[:8]}.*.cid"):
@@ -327,6 +350,20 @@ async def mesa_export_save(request: Request, name: str = "sessao",
     if len(data) > 200 * 1024 * 1024:
         raise HTTPException(413, "recording too large")
     MESA_EXPORTS.mkdir(parents=True, exist_ok=True)
+    if client_id is None:
+        return await asyncio.to_thread(_save_export, data, name, None)
+    # one save per client id at a time: a retry that arrives while the first
+    # upload is still transcoding waits for it and gets the same file
+    lock = _upload_locks.setdefault(client_id, asyncio.Lock())
+    try:
+        async with lock:
+            return await asyncio.to_thread(_save_export, data, name, client_id)
+    finally:
+        if not lock.locked() and _upload_locks.get(client_id) is lock:
+            _upload_locks.pop(client_id, None)
+
+
+def _save_export(data: bytes, name: str, client_id):
     if client_id is not None:
         # a retry of an upload that already landed: hand back the same file
         existing = _export_by_client_id(client_id)
@@ -335,18 +372,29 @@ async def mesa_export_save(request: Request, name: str = "sessao",
     ext = _export_kind(data)
     if ext is None:
         raise HTTPException(400, "not a wav, webm or m4a")
+    stored = ".m4a" if ext == ".webm" else ext      # webm takes become AAC in M4A
     safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-") or "sessao"
     stem = f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}"
     if client_id is None:
-        fname = f"{stem}{ext}"
+        fname = f"{stem}{stored}"
     else:
         stem = f"{stem}-{client_id[:8]}"
-        fname, n = f"{stem}{ext}", 2
+        fname, n = f"{stem}{stored}", 2
         while (MESA_EXPORTS / fname).exists():   # same second, same id prefix
-            fname, n = f"{stem}-{n}{ext}", n + 1
+            fname, n = f"{stem}-{n}{stored}", n + 1
     dest = MESA_EXPORTS / fname
     part = MESA_EXPORTS / f".{fname}.part"
-    part.write_bytes(data)
+    if ext == ".webm":
+        raw = MESA_EXPORTS / f".{fname}.webm.part"
+        try:
+            raw.write_bytes(data)
+            if not _webm_to_m4a(raw, part):
+                part.unlink(missing_ok=True)
+                raise HTTPException(400, "that webm could not be read")
+        finally:
+            raw.unlink(missing_ok=True)
+    else:
+        part.write_bytes(data)
     part.replace(dest)
     for side in (".dur", ".cid"):
         dest.with_name(fname + side).unlink(missing_ok=True)

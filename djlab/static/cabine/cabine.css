@@ -2,6 +2,19 @@
    must never collide). The crate uses the mesa's paper palette; the board
    (.cab-board*) is dark hardware. */
 
+/* ---------- type: self-hosted (the shell opens with no signal) ----------
+   Fraunces and Archivo, variable, latin subset, from Google Fonts. Both under
+   the SIL Open Font License 1.1 (fonts/OFL-Fraunces.txt, fonts/OFL-Archivo.txt).
+   Offline before the first visit cached them: the system fonts stand in. */
+@font-face {
+  font-family: "Fraunces"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("/static/cabine/fonts/fraunces-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Archivo"; font-style: normal; font-weight: 100 900; font-stretch: 100%; font-display: swap;
+  src: url("/static/cabine/fonts/archivo-latin.woff2") format("woff2");
+}
+
 /* ---------- shell ---------- */
 .cab-body {
   --cab-paper: oklch(0.955 0.018 85);
@@ -87,6 +100,12 @@
 }
 .cab-crate-sub { margin: 6px 0 0; color: var(--cab-ink-soft); font-size: 13px; }
 .cab-crate-head .cab-btn { flex-direction: column; gap: 2px; min-height: 52px; }
+.cab-crate-head-btns { display: flex; align-items: flex-end; gap: 8px; }
+.cab-help-btn {
+  width: 44px; height: 44px; border-radius: 22px; border: 1.5px solid var(--cab-ink); background: transparent;
+  color: var(--cab-ink); font: 700 18px/1 "Fraunces", Georgia, serif; cursor: pointer; flex: none;
+}
+.cab-help-btn:focus-visible { outline: 2px solid var(--cab-terra); outline-offset: 2px; }
 
 .cab-h2 { font: 600 22px/1.1 "Fraunces", Georgia, serif; margin: 0; }
 .cab-h2 small { font: 400 12px "Archivo", system-ui, sans-serif; color: var(--cab-ink-soft); margin-left: 4px; }
@@ -260,6 +279,10 @@
   touch-action: manipulation;
 }
 .cab-strip-rec:disabled { cursor: default; }
+.cab-strip-rec.cab-on {
+  color: #fff; background: #b3121f; border-color: #ff4d5a; letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums; box-shadow: 0 0 8px #ff2a3a88;
+}
 
 .cab-board {
   position: absolute; --u: 3px; --fs: max(5px, calc(var(--u) * 1.85));
@@ -505,3 +528,65 @@
   .cab-progress span { transition: none; }
   .cab-blink { animation: none; }
 }
+
+/* ---------- the shell's cards (Task 11, ui/cards.js) ---------- */
+
+/* install and help: inline at the top of the crate */
+.cab-install {
+  display: grid; gap: 8px; padding: 14px 14px 12px; border-radius: 14px;
+  background: var(--cab-ink); color: var(--cab-paper); font-size: 14px; line-height: 1.4;
+}
+.cab-install p { margin: 0; }
+.cab-install-kicker { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: oklch(0.8 0.12 60); font-weight: 700; }
+.cab-install-h { font: 600 22px/1.1 "Fraunces", Georgia, serif; margin: 0; }
+.cab-install-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.cab-install-step {
+  display: grid; grid-template-columns: 76px 1fr; gap: 8px; align-items: baseline;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid oklch(1 0 0 / 0.18);
+}
+.cab-install-mine { border-color: oklch(0.8 0.12 60); background: oklch(1 0 0 / 0.06); }
+.cab-install-help { color: oklch(0.85 0.02 80); font-size: 13px; }
+.cab-install .cab-btn { justify-self: start; background: var(--cab-paper); color: var(--cab-ink); }
+
+/* the PIN card: over everything, but only when the server asked */
+.cab-pin {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: oklch(0.2 0.02 55 / 0.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.cab-pin-card {
+  width: min(320px, 100%); display: grid; gap: 8px; text-align: center; padding: 18px 16px 14px;
+  border-radius: 16px; background: var(--cab-paper); color: var(--cab-ink); border: 2px solid var(--cab-terra);
+  box-shadow: 0 12px 40px oklch(0 0 0 / 0.35);
+}
+.cab-pin-card p { margin: 0; }
+.cab-pin-kicker { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--cab-terra-deep); font-weight: 700; }
+.cab-pin-h { font: 900 32px/1 "Fraunces", Georgia, serif; margin: 0; }
+.cab-pin-why { font-size: 13px; color: var(--cab-ink-soft); }
+.cab-pin-input {
+  justify-self: center; width: 8ch; font: 600 26px/1 "Archivo", system-ui, sans-serif; letter-spacing: 0.35em;
+  text-align: center; padding: 10px 6px; border-radius: 8px; border: 2px solid var(--cab-terra);
+  background: transparent; color: inherit;
+}
+.cab-pin-msg { min-height: 1.3em; font-size: 13px; font-weight: 600; color: var(--cab-terra-deep); }
+.cab-pin-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* tap to resume: the audio was interrupted */
+.cab-resume {
+  position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; cursor: pointer;
+  background: oklch(0.12 0.01 55 / 0.82); color: #f3f1ea; touch-action: none; user-select: none;
+  -webkit-user-select: none;
+}
+.cab-resume-card { display: grid; gap: 10px; max-width: 360px; padding: 0 24px; text-align: center; }
+.cab-resume-card b { font: 900 34px/1 "Fraunces", Georgia, serif; color: #ff9d3c; }
+.cab-resume-card span { font-size: 14px; color: #c9c7c0; line-height: 1.4; }
+
+/* recordings on the crate */
+.cab-rec-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.cab-rec-row {
+  display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 6px 0;
+  border-bottom: 1px solid var(--cab-rule);
+}
+.cab-rec-status { font-size: 12px; color: var(--cab-terra-deep); white-space: nowrap; }
+.cab-rec-up .cab-rec-status { color: var(--cab-palm); }

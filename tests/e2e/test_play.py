@@ -467,7 +467,7 @@ def test_strip_layout_and_playing_screenshot(engine, chromium, webkit, base_url,
         s, c = box["strip"], box["canvas"]
         assert abs(c["l"] - s["l"]) < 1 and abs(c["r"] - s["r"]) < 1 and abs(c["b"] - s["b"]) < 1.5, box
         assert box["rec"]["r"] <= s["r"] + 0.5 and box["rec"]["b"] <= s["b"] + 0.5 and box["rec"]["t"] >= s["t"] - 0.5
-        assert box["recDisabled"] is True, "REC is drawn, Task 11 wires it"
+        assert box["recDisabled"] is False, "REC is live (Task 11)"
         assert box["lanes"][0]["x"] + c["l"] >= box["caixa"]["r"], "the waveform starts right of caixa"
         assert s["b"] <= box["board"]["t"] + 0.5, "the strip sits above the board"
         # browse open: the list stays inside the strip

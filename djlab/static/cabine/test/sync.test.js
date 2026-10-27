@@ -262,3 +262,149 @@ test("gridAll runs the job and then refreshes carried grids", async () => {
   assert.equal(job.status, "done");
   assert.ok(server.calls.includes("POST /api/cabine/grid/all"));
 });
+
+// ---- Task 11: the PIN card hook and the upload queue ------------------------------
+
+/** The fake server behind a PIN: every /api/ call answers 401 until `authed`,
+ *  and POST /api/mesa/export stores uploads by client id. */
+function lockedServer(state = {}) {
+  const s = fakeServer(state);
+  const inner = s.fetch;
+  s.authed = !!state.authed;
+  s.exports = new Map();                // client_id -> {file, bytes, type}
+  s.posts = [];
+  s.exportStatus = null;                // force a status for the next export POST
+  s.fetch = async (url, opts = {}) => {
+    const u = new URL(url, "http://x");
+    if (s.offline) throw new TypeError("Failed to fetch");
+    if (u.pathname.startsWith("/api/") && !s.authed) {
+      s.calls.push(`401 ${u.pathname}`);
+      return new Response(JSON.stringify({ detail: "auth required" }), { status: 401 });
+    }
+    if (u.pathname === "/api/mesa/export" && (opts.method || "GET") === "POST") {
+      const cid = u.searchParams.get("client_id");
+      s.posts.push({ name: u.searchParams.get("name"), cid, type: opts.headers && opts.headers["Content-Type"] });
+      if (s.exportStatus) { const st = s.exportStatus; s.exportStatus = null; return new Response("{}", { status: st }); }
+      if (!s.exports.has(cid)) {
+        const bytes = new Uint8Array(await opts.body.arrayBuffer());
+        s.exports.set(cid, { file: `cabine-x-${cid.slice(0, 8)}.m4a`, bytes });
+      }
+      return new Response(JSON.stringify({ file: s.exports.get(cid).file }), { status: 200 });
+    }
+    return inner(url, opts);
+  };
+  return s;
+}
+
+async function lockedSetup(state = {}, hooks = {}) {
+  const server = lockedServer(state);
+  const store = await openStore({ indexedDB: new FakeIDB(), storage: fakeStorage() });
+  const asked = [];
+  const locked = [];
+  const sync = makeSync({
+    store, fetch: server.fetch, sleep: async () => {}, pollMs: 0,
+    onAuth: hooks.onAuth || (async () => { asked.push(1); server.authed = true; return true; }),
+    onLocked: () => locked.push(1),
+  });
+  return { server, store, sync, asked, locked };
+}
+
+async function finishedRecording(store, id, bytes, mime = "audio/webm;codecs=opus") {
+  await store.startRecording({ id, mime, createdAt: Date.now() });
+  await store.appendChunk(id, 0, new Blob([new Uint8Array(bytes)]));
+  await store.finishRecording(id, { durationS: 60 });
+}
+
+test("a server action that meets a 401 asks for the PIN, then runs again", async () => {
+  const { server, sync, asked } = await lockedSetup({ library: [metaOf("a.wav")] });
+  const r = await sync.api("/api/cabine/library", { ask: true });
+  assert.equal(r.status, 200);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(server.calls.filter((c) => c.endsWith("/api/cabine/library")),
+    ["401 /api/cabine/library", "GET /api/cabine/library"]);
+});
+
+test("carry, pull and fixGrid are server actions: they ask too", async () => {
+  const { sync, store, asked } = await lockedSetup({ grids: { "a.wav": G() } });
+  await sync.carry("a.wav", () => {}, metaOf("a.wav"));
+  assert.equal(asked.length, 1);
+  assert.ok(await store.getEntry("a.wav"));
+  const s2 = await lockedSetup({ grids: { "a.wav": G() } });
+  await s2.sync.carry("a.wav", () => {}, metaOf("a.wav"));     // authed by its own card
+  s2.server.authed = false;
+  await s2.sync.fixGrid("a.wav", "double");
+  assert.equal(s2.asked.length, 2);
+  s2.server.authed = false;
+  const job = await s2.sync.pull("https://youtube.com/watch?v=x");
+  assert.equal(job.status, "done");
+  assert.equal(s2.asked.length, 3);
+});
+
+test("background calls never ask: library listing, grid refresh", async () => {
+  const { sync, store, asked } = await lockedSetup({ authed: true, grids: {} });
+  await sync.carry("a.wav", () => {}, metaOf("a.wav"));
+  const s = await lockedSetup();
+  await assert.rejects(s.sync.api("/api/cabine/library"), (e) => e instanceof ApiError && e.status === 401);
+  await s.store.putTrack({ file: "b.wav", meta: metaOf("b.wav"), peaks: PEAKS, mp3: MP3 });
+  const r = await s.sync.refreshGrids();
+  assert.deepEqual(r.pending, ["b.wav"]);
+  assert.equal(s.asked.length, 0);
+  assert.equal(asked.length, 0);
+  assert.ok(store);
+});
+
+test("a declined PIN card fails the action with its 401", async () => {
+  const { sync } = await lockedSetup({}, { onAuth: async () => false });
+  await assert.rejects(sync.api("/api/intake/youtube/search?q=x", { ask: true }),
+    (e) => e instanceof ApiError && e.status === 401);
+});
+
+test("drainUploads posts each finished take once, as name=cabine with its client id", async () => {
+  const { server, store, sync } = await lockedSetup({ authed: true });
+  await finishedRecording(store, "ride-aaaa-1", [1, 2, 3]);
+  await store.startRecording({ id: "ride-live", mime: "audio/webm" });         // still recording
+  await store.appendChunk("ride-live", 0, new Blob([new Uint8Array([9])]));
+  const r = await sync.drainUploads();
+  assert.deepEqual(r, { sent: 1, failed: 0, locked: false, offline: false });
+  assert.deepEqual(server.posts, [{ name: "cabine", cid: "ride-aaaa-1", type: "audio/webm;codecs=opus" }]);
+  assert.deepEqual([...server.exports.get("ride-aaaa-1").bytes], [1, 2, 3]);
+  const recs = await store.listRecordings();
+  const done = recs.find((x) => x.id === "ride-aaaa-1");
+  assert.equal(done.uploaded, true);
+  assert.equal(done.file, "cabine-x-ride-aaa.m4a");
+  assert.equal(recs.find((x) => x.id === "ride-live").uploaded, false);
+  await sync.drainUploads();
+  assert.equal(server.posts.length, 1, "nothing left to send");
+});
+
+test("drainUploads: a 401 keeps the queue, tells the app once, then uploads exactly once after the PIN", async () => {
+  const { server, store, sync, locked, asked } = await lockedSetup();
+  await finishedRecording(store, "ride-bbbb-1", [4, 5]);
+  await finishedRecording(store, "ride-bbbb-2", [6]);
+  const r1 = await sync.drainUploads();
+  assert.equal(r1.locked, true);
+  assert.equal(locked.length, 1);
+  assert.equal(asked.length, 0, "a background drain never opens the card itself");
+  assert.ok((await store.listRecordings()).every((x) => !x.uploaded));
+  server.authed = true;
+  const [a, b] = await Promise.all([sync.drainUploads(), sync.drainUploads()]);  // one drain at a time
+  assert.equal(a.sent + (b === a ? 0 : b.sent), 2);
+  assert.deepEqual(server.posts.filter((p) => p.cid).map((p) => p.cid).sort(), ["ride-bbbb-1", "ride-bbbb-2"]);
+  assert.ok((await store.listRecordings()).every((x) => x.uploaded));
+});
+
+test("drainUploads: a server error retries on the next drain, offline stops quietly", async () => {
+  const { server, store, sync } = await lockedSetup({ authed: true });
+  await finishedRecording(store, "ride-cccc-1", [7]);
+  server.exportStatus = 500;
+  let r = await sync.drainUploads();
+  assert.equal(r.failed, 1);
+  assert.equal((await store.listRecordings())[0].uploaded, false);
+  server.offline = true;
+  r = await sync.drainUploads();
+  assert.equal(r.offline, true);
+  server.offline = false;
+  r = await sync.drainUploads();
+  assert.equal(r.sent, 1);
+  assert.equal((await store.listRecordings())[0].uploaded, true);
+});

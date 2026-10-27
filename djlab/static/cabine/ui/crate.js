@@ -4,7 +4,10 @@
 // YouTube for the upload; he picks it), pull into sources/techno/ with the
 // job polled, then carry tracks to the phone, remove them, and fix their
 // grids. Everything the phone holds stays listed when the server is out
-// of reach.
+// of reach. Server actions (search, pull, carry, grid) that meet a 401 open
+// the app's PIN card (sync.api {ask: true}); listing the crate never does,
+// it offers a "PIN" button instead. The recordings the phone holds are
+// listed with "waiting to upload" or "in O Arquivo".
 
 import { formatBytes, formatDuration, formatBpm, mergeLibrary, uploadQuery } from "./crate-model.js";
 import { Preview } from "./preview.js";
@@ -24,7 +27,10 @@ const SHELL = `
       <h1 class="cab-crate-h1">A Caixa</h1>
       <p class="cab-crate-sub">the crate: find, pull, carry to the phone</p>
     </div>
-    <button type="button" class="cab-btn cab-btn-ink" id="cab-to-board">a cabine<small>the board</small></button>
+    <div class="cab-crate-head-btns">
+      <button type="button" class="cab-help-btn" id="cab-help" aria-label="install and help">?</button>
+      <button type="button" class="cab-btn cab-btn-ink" id="cab-to-board">a cabine<small>the board</small></button>
+    </div>
   </header>
 
   <section class="cab-storage" id="cab-storage" aria-live="polite">
@@ -57,7 +63,14 @@ const SHELL = `
       <button type="button" class="cab-chip" id="cab-only-phone" aria-pressed="false">on phone</button>
     </div>
     <p class="cab-msg cab-offline" id="cab-offline" hidden>Server out of reach: showing what is on the phone.</p>
+    <p class="cab-msg cab-offline" id="cab-locked" hidden>The server asks for the PIN: showing what is on the phone.
+      <button type="button" class="cab-link" id="cab-pin-open">PIN</button></p>
     <ul class="cab-tracks" id="cab-tracks"></ul>
+  </section>
+
+  <section class="cab-panel cab-recs" id="cab-recs" hidden>
+    <h2 class="cab-h2">Gravações <small id="cab-recs-count"></small></h2>
+    <ul class="cab-rec-list" id="cab-rec-list"></ul>
   </section>
 </div>
 
@@ -85,12 +98,13 @@ const SHELL = `
   </div>
 </div>`;
 
-export function renderCrate(root, { store, sync, onBoard = () => {} }) {
+export function renderCrate(root, { store, sync, onBoard = () => {}, onHelp = () => {} }) {
   root.innerHTML = SHELL;
   const $ = (s) => root.querySelector(s);
   const state = {
     tab: "youtube",
     server: null,              // library tracks, null when unreachable
+    locked: false,             // the library answered 401: no cookie on this phone
     carried: [],
     progress: new Map(),       // file -> {loaded, total, phase}
     filter: "",
@@ -122,10 +136,36 @@ export function renderCrate(root, { store, sync, onBoard = () => {} }) {
     try {
       const r = await sync.api("/api/cabine/library");
       state.server = (await r.json()).tracks || [];
+      state.locked = false;
     } catch (e) {
       state.server = null;
+      state.locked = e && e.status === 401;
     }
     await reloadCarried();
+    await renderRecordings();
+  }
+
+  // ---- recordings ---------------------------------------------------------------
+
+  const when = (ms) => {
+    const d = new Date(ms);
+    return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+  };
+
+  async function renderRecordings() {
+    const recs = (await store.listRecordings()).filter((r) => !r.empty);
+    if (!alive || !$("#cab-recs")) return;
+    $("#cab-recs").hidden = recs.length === 0;
+    const waiting = recs.filter((r) => !r.uploaded).length;
+    $("#cab-recs-count").textContent = waiting ? `${waiting} waiting to upload` : `${recs.length} in O Arquivo`;
+    $("#cab-rec-list").innerHTML = recs.slice().reverse().map((r) => {
+      const status = r.uploaded ? "in O Arquivo" : r.done === false ? "recording" : "waiting to upload";
+      const len = r.durationS ? formatDuration(r.durationS) : "";
+      const part = r.part ? ` &middot; part ${r.part}` : "";
+      return `<li class="cab-rec-row${r.uploaded ? " cab-rec-up" : ""}" data-rec="${esc(r.id)}">
+        <span>${esc(when(r.createdAt || 0))}${part}${len ? ` &middot; ${esc(len)}` : ""}</span>
+        <b class="cab-rec-status">${status}</b></li>`;
+    }).join("");
   }
 
   async function reloadCarried() {
@@ -182,7 +222,8 @@ export function renderCrate(root, { store, sync, onBoard = () => {} }) {
 
   function renderTracks() {
     const rows = visibleRows();
-    $("#cab-offline").hidden = state.server !== null;
+    $("#cab-offline").hidden = state.server !== null || state.locked;
+    $("#cab-locked").hidden = !state.locked;
     $("#cab-lib-count").textContent = `${rows.length} ${rows.length === 1 ? "track" : "tracks"}`;
     $("#cab-tracks").innerHTML = rows.length ? rows.map(rowHtml).join("")
       : `<li class="cab-empty">${state.onlyPhone ? "Nothing on the phone yet. Tap levar on a track to carry it." : "No tracks match."}</li>`;
@@ -308,7 +349,7 @@ export function renderCrate(root, { store, sync, onBoard = () => {} }) {
     const path = { youtube: "/api/intake/youtube/search", soundcloud: "/api/intake/soundcloud/search",
       spotify: "/api/intake/spotify/search" }[state.tab];
     try {
-      const d = await (await sync.api(`${path}?q=${encodeURIComponent(q)}`)).json();
+      const d = await (await sync.api(`${path}?q=${encodeURIComponent(q)}`, { ask: true })).json();
       if (state.tab === "spotify") {
         state.lastSpotify = d.tracks || [];
         renderSpotify(state.lastSpotify);
@@ -483,6 +524,10 @@ export function renderCrate(root, { store, sync, onBoard = () => {} }) {
   // ---- wiring ---------------------------------------------------------------------------
 
   $("#cab-to-board").addEventListener("click", () => onBoard());
+  $("#cab-help").addEventListener("click", () => onHelp());
+  $("#cab-pin-open").addEventListener("click", async () => {
+    if (await sync.auth()) loadLibrary();
+  });
   const off = sync.onchange(() => {
     if (alive) reloadCarried().then(() => { if (state.sheetFile) renderSheetGrid(); });
   });
@@ -493,6 +538,7 @@ export function renderCrate(root, { store, sync, onBoard = () => {} }) {
   return {
     ready,
     refresh: loadLibrary,
+    refreshRecordings: () => renderRecordings(),
     destroy() {
       alive = false;
       off();

@@ -123,3 +123,11 @@ test("master_and_fx_bpm_follow_the_sync_roles", () => {
   assert.equal(fxBpm([A, B], "master"), 128, "no master: the playing deck");
   assert.equal(fxBpm([deck(null, false), deck(null, false)], "master"), null);
 });
+
+test("rec_label_shows_elapsed_mm_ss_while_recording", async () => {
+  const { recLabel } = await import("../ui/strip.js");
+  assert.equal(recLabel(false, 0), "REC");
+  assert.equal(recLabel(true, 0), "00:00");
+  assert.equal(recLabel(true, 75.9), "01:15");
+  assert.equal(recLabel(true, 3725), "62:05");
+});

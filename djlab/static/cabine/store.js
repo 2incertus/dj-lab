@@ -1,10 +1,19 @@
-// A Cabine: what lives on the phone (IndexedDB "cabine", version 1).
+// A Cabine: what lives on the phone (IndexedDB "cabine", version 2).
 //
 // Object stores:
 //   tracks      key file: {file, meta, grid, bytes, carriedAt}        (light)
 //   audio       key file: {file, mp3: ArrayBuffer, peaks: ArrayBuffer} (heavy)
 //   hotcues     key file: {file, cues}
-//   recordings  key id:   {id, blob, mime, createdAt, uploaded}
+//   recordings  key id:   {id, mime, createdAt, uploaded, done, chunks, bytes,
+//                          durationS, ride, part, file, recovered} (light; a
+//                          recording made by putRecording also has a blob)
+//   chunks      key "<id>#<seq, 6 digits>": {key, id, seq, blob}   (v2)
+//
+// A recording is written while it records: every MediaRecorder chunk (5 s)
+// is its own row, so a crash keeps everything flushed. finishStale() on the
+// next start closes recordings a crash left open. Once the server confirms
+// an upload, markUploaded frees the chunks and keeps the row (the crate lists
+// it as "in O Arquivo").
 //
 // The audio sits in its own store so listing the crate never pulls every
 // carried MP3 into memory (a dozen tracks is a few hundred MB on a phone).
@@ -15,8 +24,9 @@
 // a fresh copy each call: Safari's decodeAudioData detaches its input.
 
 export const DB_NAME = "cabine";
-export const DB_VERSION = 1;
-const STORES = { tracks: "file", audio: "file", hotcues: "file", recordings: "id" };
+export const DB_VERSION = 2;
+const STORES = { tracks: "file", audio: "file", hotcues: "file", recordings: "id", chunks: "key" };
+const chunkKey = (id, seq) => `${id}#${String(seq).padStart(6, "0")}`;
 
 const done = (r) => new Promise((resolve, reject) => {
   r.onsuccess = () => resolve(r.result);
@@ -146,19 +156,82 @@ export class Store {
 
   // ---- recordings -------------------------------------------------------------
 
+  /** A whole recording in one go (tests, imports). */
   putRecording({ id, blob, mime, createdAt, uploaded = false }) {
     return this._put("recordings", { id, blob, mime, createdAt, uploaded: !!uploaded });
+  }
+
+  /** Open a recording that will grow chunk by chunk. */
+  startRecording({ id, mime, createdAt = this.now(), ride = id, part = 0 }) {
+    return this._put("recordings", {
+      id, mime, createdAt, ride, part, uploaded: false, done: false, chunks: 0, bytes: 0, durationS: null,
+    });
+  }
+
+  /** Append chunk `seq` (0, 1, ...) of recording `id`, in its own transaction. */
+  async appendChunk(id, seq, blob) {
+    const tx = this.db.transaction(["recordings", "chunks"], "readwrite");
+    tx.objectStore("chunks").put({ key: chunkKey(id, seq), id, seq, blob });
+    const st = tx.objectStore("recordings");
+    const r = await done(st.get(id));
+    if (r) st.put({ ...r, chunks: Math.max(r.chunks || 0, seq + 1), bytes: (r.bytes || 0) + (blob.size || 0) });
+    await committed(tx);
+  }
+
+  async finishRecording(id, { durationS = null } = {}) {
+    const tx = this.db.transaction("recordings", "readwrite");
+    const st = tx.objectStore("recordings");
+    const r = await done(st.get(id));
+    if (r) st.put({ ...r, done: true, durationS: durationS ?? r.durationS ?? null });
+    await committed(tx);
+  }
+
+  /** Close recordings a crash left open (not in `live`). Their ids. */
+  async finishStale(live = new Set()) {
+    const stale = (await this._all("recordings")).filter((r) => r.done === false && !live.has(r.id));
+    for (const r of stale) {
+      const tx = this.db.transaction("recordings", "readwrite");
+      tx.objectStore("recordings").put({ ...r, done: true, recovered: true });
+      await committed(tx);
+    }
+    return stale.map((r) => r.id);
+  }
+
+  async _chunkKeys(id) {
+    const tx = this.db.transaction("chunks", "readonly");
+    const keys = await done(tx.objectStore("chunks").getAllKeys());
+    return keys.filter((k) => typeof k === "string" && k.startsWith(`${id}#`)).sort();
+  }
+
+  /** The recording as one Blob (chunks in order), or null when there is no audio. */
+  async recordingBlob(id) {
+    const r = await this._get("recordings", id);
+    if (!r) return null;
+    if (r.blob) return r.blob;
+    const keys = await this._chunkKeys(id);
+    if (!keys.length) return null;
+    const tx = this.db.transaction("chunks", "readonly");
+    const st = tx.objectStore("chunks");
+    const rows = await Promise.all(keys.map((k) => done(st.get(k))));
+    return new Blob(rows.filter(Boolean).map((c) => c.blob), { type: r.mime || "" });
   }
 
   async listRecordings() {
     return (await this._all("recordings")).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   }
 
-  async markUploaded(id) {
-    const tx = this.db.transaction("recordings", "readwrite");
+  /** The server has it (as `file`): flag it and free the audio on the phone. */
+  async markUploaded(id, file = null) {
+    const keys = await this._chunkKeys(id);
+    const tx = this.db.transaction(["recordings", "chunks"], "readwrite");
     const st = tx.objectStore("recordings");
     const r = await done(st.get(id));
-    if (r) st.put({ ...r, uploaded: true });
+    if (r) {
+      const { blob, ...rest } = r;
+      st.put({ ...rest, uploaded: true, file: file || r.file || null, uploadedAt: this.now() });
+      const cs = tx.objectStore("chunks");
+      for (const k of keys) cs.delete(k);
+    }
     await committed(tx);
   }
 

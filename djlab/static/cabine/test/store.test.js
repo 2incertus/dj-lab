@@ -15,13 +15,13 @@ async function fresh(opts = {}) {
   return { idb, storage, store };
 }
 
-test("opens the cabine database, version 1, with its object stores", async () => {
+test("opens the cabine database, version 2, with its object stores", async () => {
   const { idb } = await fresh();
   assert.equal(DB_NAME, "cabine");
-  assert.equal(DB_VERSION, 1);
-  assert.deepEqual(idb.opens, [["cabine", 1]]);
+  assert.equal(DB_VERSION, 2);
+  assert.deepEqual(idb.opens, [["cabine", 2]]);
   const db = idb.dbs.get("cabine");
-  for (const s of ["tracks", "audio", "hotcues", "recordings"]) {
+  for (const s of ["tracks", "audio", "hotcues", "recordings", "chunks"]) {
     assert.ok(db.objectStoreNames.contains(s), s);
   }
   // a second open does not try to recreate the stores
@@ -128,6 +128,70 @@ test("recordings: put, list, mark uploaded", async () => {
   assert.deepEqual(list.map((r) => [r.id, r.uploaded]), [["r1", true], ["r2", false]]);
   await store.markUploaded("nope");                       // no throw, nothing created
   assert.equal((await store.listRecordings()).length, 2);
+});
+
+test("a version 1 database (Task 8 phones) upgrades in place: carried tracks stay", async () => {
+  const idb = new FakeIDB();
+  // the v1 layout, with a carried track in it
+  const r = idb.open("cabine", 1);
+  r.onupgradeneeded = () => {
+    for (const [n, k] of [["tracks", "file"], ["audio", "file"], ["hotcues", "file"], ["recordings", "id"]]) {
+      r.result.createObjectStore(n, { keyPath: k });
+    }
+  };
+  await new Promise((ok) => { r.onsuccess = ok; });
+  const v1 = new (await import("../store.js")).Store(r.result);
+  await v1.putTrack({ file: "old.wav", meta: meta("old.wav"), peaks: bytes(1), mp3: bytes(2, 3) });
+  const store = await openStore({ indexedDB: idb, storage: fakeStorage() });
+  assert.ok(idb.dbs.get("cabine").objectStoreNames.contains("chunks"));
+  assert.deepEqual([...new Uint8Array((await store.getTrack("old.wav")).mp3)], [2, 3]);
+});
+
+test("a recording grows chunk by chunk; what was flushed survives without finish", async () => {
+  const { store } = await fresh();
+  await store.startRecording({ id: "ride1", mime: "audio/webm;codecs=opus", createdAt: 10, ride: "ride1", part: 0 });
+  const b = (...v) => new Blob([new Uint8Array(v)]);
+  await store.appendChunk("ride1", 0, b(1, 2));
+  await store.appendChunk("ride1", 1, b(3));
+  await store.appendChunk("ride1", 2, b(4, 5, 6));
+  let [rec] = await store.listRecordings();
+  assert.equal(rec.done, false);
+  assert.equal(rec.chunks, 3);
+  assert.equal(rec.bytes, 6);
+  assert.equal(rec.uploaded, false);
+  // the app was killed here: the next start finishes what it finds
+  assert.deepEqual(await store.finishStale(new Set()), ["ride1"]);
+  [rec] = await store.listRecordings();
+  assert.equal(rec.done, true);
+  assert.equal(rec.recovered, true);
+  const blob = await store.recordingBlob("ride1");
+  assert.equal(blob.type, "audio/webm;codecs=opus");
+  assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [1, 2, 3, 4, 5, 6]);
+  // a live recording is left alone
+  await store.startRecording({ id: "ride2", mime: "audio/webm", createdAt: 11 });
+  assert.deepEqual(await store.finishStale(new Set(["ride2"])), []);
+});
+
+test("chunks come back in order past ten, and finish records the length", async () => {
+  const { store } = await fresh();
+  await store.startRecording({ id: "r-a", mime: "audio/mp4", createdAt: 1 });
+  await store.startRecording({ id: "r-ab", mime: "audio/mp4", createdAt: 2 });
+  for (let i = 11; i >= 0; i--) await store.appendChunk("r-a", i, new Blob([new Uint8Array([i])]));
+  await store.appendChunk("r-ab", 0, new Blob([new Uint8Array([99])]));
+  await store.finishRecording("r-a", { durationS: 61.5 });
+  const blob = await store.recordingBlob("r-a");
+  assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  const [a, ab] = await store.listRecordings();
+  assert.equal(a.done, true);
+  assert.equal(a.durationS, 61.5);
+  assert.equal(ab.done, false);
+  // the server confirmed it: the audio is freed, the row stays as "in O Arquivo"
+  await store.markUploaded("r-a", "cabine-20261027-120000-r-a.m4a");
+  const [a2] = await store.listRecordings();
+  assert.equal(a2.uploaded, true);
+  assert.equal(a2.file, "cabine-20261027-120000-r-a.m4a");
+  assert.equal(await store.recordingBlob("r-a"), null);
+  assert.deepEqual([...new Uint8Array(await (await store.recordingBlob("r-ab")).arrayBuffer())], [99]);
 });
 
 test("estimate and persist go through navigator.storage", async () => {

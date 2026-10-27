@@ -179,17 +179,24 @@ def test_sw_served_with_scope_header_and_ungated(crate, monkeypatch):
     assert man["display"] == "fullscreen" and man["orientation"] == "landscape"
     assert any(i["sizes"] == "512x512" for i in man["icons"])
 
-    r = c.get("/cabine", follow_redirects=False)
-    assert r.status_code == 307
-    assert r.headers["location"] == "/login?next=/cabine"
+    # the shell is public (it holds no data; the PIN card lives in the app):
+    # a fresh home-screen install has its own cookie jar and must still open
+    for path in ("/cabine", "/cabine?deck=1"):
+        page = c.get(path, follow_redirects=False)
+        assert page.status_code == 200, path
+        assert 'id="cab-root"' in page.text and "viewport-fit=cover" in page.text
+        assert "/cabine/manifest.webmanifest" in page.text
+    # everything private stays behind the cookie
     assert c.get("/api/cabine/library").status_code == 401
     assert c.get("/api/cabine/carry", params={"file": "x.wav"}).status_code == 401
+    assert c.post("/api/mesa/export", params={"name": "cabine"}, content=b"x").status_code == 401
+    r = c.get("/cabine/other", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/login?next=/cabine/other"
+    # the mesa keeps its redirect
+    assert c.get("/mesa", follow_redirects=False).status_code == 307
 
     c.cookies.set("dj_auth", server.PIN_HASH)
-    page = c.get("/cabine")
-    assert page.status_code == 200
-    assert 'id="cab-root"' in page.text and "viewport-fit=cover" in page.text
-    assert "/cabine/manifest.webmanifest" in page.text
+    assert c.get("/cabine").status_code == 200
 
 
 def test_login_next_rejects_offsite(crate, monkeypatch):
