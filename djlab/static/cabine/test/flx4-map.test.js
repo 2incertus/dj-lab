@@ -9,8 +9,10 @@ import { DECK_ACTIONS, TEMPO_RANGES } from "../engine/deck.js";
 import { MIXER_ACTIONS } from "../engine/mixer.js";
 import { BEATFX_ACTIONS } from "../engine/fx.js";
 import { SAMPLER_ACTIONS } from "../engine/sampler.js";
-import { fitBoard, XFADER_CLEAR_PX, SAFE_FALLBACK } from "../ui/board-layout.js";
-import { faderDelta, TEMPO_FINE_SCALE } from "../ui/controls.js";
+import {
+  fitBoard, placeBox, sectionOf, LAYOUT, LAYOUTS, STRIP_SHARE, XFADER_CLEAR_PX, SAFE_FALLBACK,
+} from "../ui/board-layout.js";
+import { faderDelta, fineScale, TEMPO_FINE_SCALE } from "../ui/controls.js";
 
 const byId = new Map(CONTROLS.map((c) => [c.id, c]));
 
@@ -67,6 +69,14 @@ test("no_overlaps", () => {
     for (let j = i + 1; j < all.length; j++) {
       assert.ok(!intersects(all[i], all[j]), `${all[i].id} overlaps ${all[j].id}`);
     }
+  }
+  // every part sits inside one section (deck 1 | mixer | deck 2), so the spread
+  // layout can move the sections apart without cutting a part in two
+  for (const c of [...CONTROLS, ...INDICATORS]) {
+    const sec = sectionOf(c.x);
+    assert.ok(c.x >= sec.x0 && c.x + c.w <= sec.x1, `${c.id} crosses into another section`);
+    if (c.section === "deck") assert.equal(sec.key, `deck${c.deck}`, c.id);
+    else assert.equal(sec.key, "mixer", c.id);
   }
   // the jog is drawn round: its box is square in panel units
   const jog = byId.get("d1-jog");
@@ -145,46 +155,84 @@ test("every_action_names_an_existing_method", () => {
   assert.deepEqual(STRIP_ACTIONS, ["openBrowse", "browseMove", "load1", "load2", "closeBrowse"]);
 });
 
+const PHONES = [
+  // iPhone landscape with its real insets; the same with env() = 0 (fallbacks); the Galaxy
+  { W: 844, H: 390, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
+  { W: 844, H: 390, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
+  { W: 760, H: 360, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
+  { W: 1400, H: 900, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
+];
+
 test("crossfader_clears_the_home_indicator_zone", () => {
   const xf = byId.get("xfader");
-  const cases = [
-    // iPhone landscape, real insets; the same with env() = 0 (fallbacks apply); the Galaxy
-    { W: 844, H: 390, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
-    { W: 844, H: 390, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
-    { W: 760, H: 360, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
-    { W: 1400, H: 900, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
-  ];
-  for (const { W, H, insets } of cases) {
-    const b = fitBoard({ W, H, insets });
-    const bottom = b.top + ((xf.y + xf.h) / 100) * b.height;
-    assert.ok(bottom <= H - XFADER_CLEAR_PX + 1e-9, `${W}x${H}: crossfader ends ${H - bottom} px above the edge`);
-    assert.ok(XFADER_CLEAR_PX >= 34);
-    const L = Math.max(insets.left, SAFE_FALLBACK.side), R = Math.max(insets.right, SAFE_FALLBACK.side);
-    assert.ok(b.left >= L - 1e-9 && b.left + b.width <= W - R + 1e-9, `${W}x${H}: inside the side safe areas`);
-    assert.ok(b.top >= b.stripBottom - 1e-9, `${W}x${H}: below the strip`);
-    assert.ok(Math.abs(b.width / b.height - BOARD_ASPECT) < 1e-9, "aspect kept");
-    assert.ok(b.top + b.height <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-9, "above the home bar");
+  assert.equal(LAYOUT, "spread", "spread is the default (ruling R23)");
+  assert.ok(XFADER_CLEAR_PX >= 34);
+  for (const mode of LAYOUTS) {
+    for (const { W, H, insets } of PHONES) {
+      const b = fitBoard({ W, H, insets, mode });
+      const tag = `${mode} ${W}x${H}`;
+      const x = placeBox(xf, b);
+      assert.ok(x.top + x.height <= H - XFADER_CLEAR_PX + 1e-9, `${tag}: crossfader ends ${H - x.top - x.height} px above the edge`);
+      const L = Math.max(insets.left, SAFE_FALLBACK.side), R = Math.max(insets.right, SAFE_FALLBACK.side);
+      assert.ok(b.left >= L - 1e-9 && b.left + b.width <= W - R + 1e-9, `${tag}: inside the side safe areas`);
+      assert.ok(b.top >= b.stripBottom - 1e-9, `${tag}: below the strip`);
+      assert.ok(b.top + b.height <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-9, `${tag}: above the home bar`);
+      assert.equal(b.stripBottom - b.stripTop, Math.round(STRIP_SHARE[mode] * H));
+      // every control lands inside the board, inside the safe area, and keeps its shape
+      for (const c of CONTROLS) {
+        const p = placeBox(c, b);
+        assert.ok(p.left >= b.left - 1e-6 && p.left + p.width <= b.left + b.width + 1e-6, `${tag}: ${c.id} x`);
+        assert.ok(Math.abs(p.width / p.height - (c.w * BOARD_ASPECT) / c.h) < 1e-9, `${tag}: ${c.id} proportions`);
+      }
+      const secs = b.sections;
+      assert.equal(secs[0].left, 0);
+      if (mode === "exact") {
+        assert.ok(Math.abs(b.width / b.height - BOARD_ASPECT) < 1e-9, `${tag}: aspect kept`);
+        assert.ok(Math.abs(secs[1].left - secs[0].width) < 1e-9, `${tag}: sections abut`);
+      } else {
+        // the whole usable width, the extra split evenly into the two gaps
+        assert.ok(Math.abs(b.width - (W - L - R)) < 1e-9, `${tag}: full width`);
+        const g1 = secs[1].left - secs[0].width, g2 = secs[2].left - (secs[1].left + secs[1].width);
+        assert.ok(g1 >= -1e-9 && Math.abs(g1 - g2) < 1e-9, `${tag}: even gaps ${g1} ${g2}`);
+        assert.ok(Math.abs(secs[2].left + secs[2].width - b.width) < 1e-9, `${tag}: deck 2 at the right edge`);
+        // inside a section, positions are the photo's (deck 1's pad 1 to its tempo)
+        const pad = placeBox(byId.get("d1-pad1"), b), tempo = placeBox(byId.get("d1-tempo"), b);
+        const ex = fitBoard({ W, H, insets, mode: "exact" });
+        const k = b.height / ex.height;
+        const pe = placeBox(byId.get("d1-pad1"), ex), te = placeBox(byId.get("d1-tempo"), ex);
+        assert.ok(Math.abs((tempo.left - pad.left) - k * (te.left - pe.left)) < 1e-6, `${tag}: deck geometry kept`);
+      }
+    }
+    // at 844 x 390 one of the bottom rules is what limits the board (no wasted height)
+    const b = fitBoard({ ...PHONES[0], mode });
+    const x = placeBox(xf, b);
+    assert.ok(Math.abs(x.top + x.height - (390 - XFADER_CLEAR_PX)) < 0.5 || b.top + b.height >= 390 - 21 - 0.5, mode);
   }
-  // at 844 x 390 the board is as large as those rules allow (no wasted height)
-  const b = fitBoard({ W: 844, H: 390, insets: { left: 47, right: 47, bottom: 21, top: 0 } });
-  const bottom = b.top + ((xf.y + xf.h) / 100) * b.height;
-  assert.ok(Math.abs(bottom - (390 - XFADER_CLEAR_PX)) < 0.5 || b.top + b.height >= 390 - 21 - 0.5,
-    "one of the bottom rules is what limits the board");
+  // spread gives a bigger board than exact on the iPhone
+  const e = fitBoard({ ...PHONES[0], mode: "exact" }), sp = fitBoard({ ...PHONES[0], mode: "spread" });
+  assert.ok(sp.height > e.height * 1.1, `${sp.height} vs ${e.height}`);
 });
 
 test("tempo_fine_step_reaches_spec_resolution", () => {
-  // spec: "the drag must allow 0.02% steps at +-6%"; a 200 px fader, one pixel of drag
+  // spec: "the drag must allow 0.02% steps at +-6%": one pixel of fine drag on the
+  // board's real tempo track, both phones, both layouts
   const range = TEMPO_RANGES[0] / 100;                         // +-6 %
   assert.equal(range, 0.06);
   const rateSpan = 2 * range;                                   // fader 0..1 = -6 % .. +6 %
-  const coarse = Math.abs(faderDelta(1, 200, false)) * rateSpan;
-  const fine = Math.abs(faderDelta(1, 200, true)) * rateSpan;
-  assert.equal(TEMPO_FINE_SCALE, 8);
-  assert.ok(coarse > 0.0002, `coarse alone is not enough: ${coarse * 100}% per px`);
-  assert.ok(fine <= 0.0002, `fine mode: ${fine * 100}% per px`);
-  // 0.02 % itself: a whole number of pixels lands within a third of a step of it
-  const px = Math.round(0.0002 / fine);
-  assert.ok(Math.abs(px * fine - 0.0002) <= fine / 2 + 1e-12);
+  assert.equal(TEMPO_FINE_SCALE, 8, "never coarser than 1:8");
+  const t = byId.get("d1-tempo");
+  for (const mode of LAYOUTS) {
+    for (const ph of PHONES.slice(0, 3)) {
+      const b = fitBoard({ ...ph, mode });
+      const travel = ((t.h - t.cap.h) / 100) * b.height;      // the drawn track
+      const coarse = Math.abs(faderDelta(1, travel)) * rateSpan;
+      const fine = Math.abs(faderDelta(1, travel, fineScale(travel))) * rateSpan;
+      const tag = `${mode} ${ph.W}x${ph.H}, travel ${travel.toFixed(1)} px, 1:${fineScale(travel)}`;
+      assert.ok(coarse > 0.0002, `${tag}: coarse alone is not enough (${coarse * 100}% per px)`);
+      assert.ok(fine <= 0.0002, `${tag}: fine ${fine * 100}% per px`);
+      assert.ok(fineScale(travel) >= TEMPO_FINE_SCALE);
+    }
+  }
   // the drag direction: down = larger fader value (faster), on the full drawn length
-  assert.ok(faderDelta(10, 200, false) > 0 && Math.abs(faderDelta(200, 200, false) - 1) < 1e-12);
+  assert.ok(faderDelta(10, 200) > 0 && Math.abs(faderDelta(200, 200) - 1) < 1e-12);
 });

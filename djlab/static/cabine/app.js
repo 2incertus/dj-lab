@@ -42,8 +42,9 @@ function showCrate() {
 }
 
 /** The FLX4 board. Until Task 10 binds the engine it runs on the demo
- *  bindings (every action logged in app.boardLog, the obvious lights follow). */
-function showBoard() {
+ *  bindings (every action logged in app.boardLog, the obvious lights follow).
+ *  opts.layout: "spread" | "exact" (ui/board-layout.js). */
+function showBoard(opts = {}) {
   leave();
   app.screen = "board";
   root.dataset.screen = "board";
@@ -51,6 +52,8 @@ function showBoard() {
   app.board = renderBoard(root, CONTROLS, demo.bindings, {
     onCrate: () => showCrate(),
     onPadMode: demo.onPadMode,
+    // "spread" by default; ?board=exact shows the panel at the photo's proportions
+    layout: opts.layout || new URLSearchParams(location.search).get("board") || undefined,
   });
   demo.attach(app.board);
   app.boardLog = demo.log;

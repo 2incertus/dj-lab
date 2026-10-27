@@ -40,7 +40,7 @@ def _context(browser, engine, w, h, auth_cookie):
     return ctx
 
 
-def _open_board(ctx, base_url, insets=None):
+def _open_board(ctx, base_url, insets=None, layout=None):
     page = ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -54,7 +54,7 @@ def _open_board(ctx, base_url, insets=None):
             s.setProperty('--cab-inset-right', i.right + 'px');
             s.setProperty('--cab-inset-bottom', i.bottom + 'px');
         }""", insets)
-    page.evaluate("() => window.cabine.showBoard()")
+    page.evaluate("(m) => window.cabine.showBoard(m ? {layout: m} : {})", layout)
     page.wait_for_selector(".cab-board .cab-board-ctl", state="attached")
     page.evaluate("() => document.fonts && document.fonts.ready")
     page.errors = errors
@@ -106,8 +106,22 @@ def touch(cdp, kind, points):
 
 # ---- tests ---------------------------------------------------------------------------
 
-def test_every_control_hittable(phone):
-    page, w, h = phone["page"], phone["w"], phone["h"]
+@pytest.mark.parametrize("layout", ["spread", "exact"])
+@pytest.mark.parametrize("name", list(PHONES))
+def test_every_control_hittable(name, layout, chromium, webkit, base_url, auth_cookie):
+    spec = PHONES[name]
+    browser = chromium if spec["engine"] == "chromium" else webkit
+    ctx = _context(browser, spec["engine"], spec["w"], spec["h"], auth_cookie)
+    try:
+        page = _open_board(ctx, base_url, spec["insets"], layout)
+        _check_hittable(page, {"name": name, "layout": layout, **spec})
+        assert not page.errors, page.errors
+    finally:
+        ctx.close()
+
+
+def _check_hittable(page, phone):
+    w, h = phone["w"], phone["h"]
     ids = page.evaluate("async () => (await import('/static/cabine/flx4-map.js')).CONTROLS.map(c => c.id)")
     boxes = rects(page)
     assert sorted(boxes) == sorted(ids), "every control is drawn once"
@@ -128,8 +142,15 @@ def test_every_control_hittable(phone):
     assert min(b["t"] for b in boxes.values()) >= strip["b"] - 0.5
     caixa = page.locator(".cab-board-caixa").bounding_box()
     assert caixa["x"] >= insets["left"] - 0.5 and caixa["y"] + caixa["height"] <= strip["b"]
+    board = page.evaluate("() => { const r = document.querySelector('.cab-board').getBoundingClientRect(); return {l: r.left, r: r.right, h: r.height}; }")
+    assert page.evaluate("() => document.querySelector('.cab-board').dataset.layout") == phone["layout"]
+    if phone["layout"] == "spread":
+        # the whole usable width: deck 1 at the left safe edge, deck 2 at the right
+        assert abs(board["l"] - insets["left"]) < 0.5 and abs(board["r"] - (w - insets["right"])) < 0.5, board
+    else:
+        assert board["l"] > insets["left"] + 20, "exact: the panel at its own proportions, centered"
     SHOTS.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SHOTS / f"board-{phone['name']}-{w}x{h}.png"))
+    page.screenshot(path=str(SHOTS / f"board-{phone['name']}-{phone['layout']}-{w}x{h}.png"))
 
 
 def test_multitouch_shift_pad_and_fader(galaxy):

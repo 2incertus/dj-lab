@@ -22,12 +22,26 @@ export const ENCODER_STEP_PX = 22;
 /** A touch that moves less than this and lifts quickly is a tap. */
 export const TAP_SLOP_PX = 8;
 export const TAP_MAX_MS = 450;
-/** Tempo fader fine mode: hold still this long, then drag distance counts 1:8. */
+/** Tempo fader fine mode: hold still this long, then drag distance is scaled
+ *  down by fineScale(travel): at least 1:8 (TEMPO_FINE_SCALE), more on a short
+ *  fader, so one pixel never moves the tempo more than TEMPO_FINE_STEP at the
+ *  finest range (+-6 %, a span of TEMPO_FINE_SPAN). The spec asks for 0.02 %
+ *  steps at +-6 %; the board's tempo track is only ~70 px on the iPhone. */
 export const TEMPO_FINE_HOLD_MS = 300;
 export const TEMPO_FINE_SCALE = 8;
+export const TEMPO_FINE_SPAN = 0.12;
+export const TEMPO_FINE_STEP = 0.0002;
 export const STILL_SLOP_PX = 3;
-/** Jog: the inner 62 % of the radius is the top plate, the rest the outer ring. */
-export const JOG_TOP_PLATE_RATIO = 0.62;
+/** Jog: the inner 80 % of the radius is the top plate, the rest the outer
+ *  ring, as on the FLX4 (ruling R24; the figure's plate edge is at 0.79 to
+ *  0.83 R, the grooved ring outside it). */
+export const JOG_TOP_PLATE_RATIO = 0.80;
+/** The hub: inside this share of the radius a turn has no usable angle (a
+ *  finger crossing the center would flip it 180 degrees), so moves there are
+ *  dropped and the angle re-anchors on the way out. */
+export const JOG_HUB_RATIO = 0.18;
+/** No single move turns the jog more than this (a jump between events). */
+export const JOG_MAX_STEP_DEG = 90;
 /** Outer ring bend gain. The hardware jog is 118 mm across; the phone's drawn
  *  wheel is about 35 mm (smaller still on the 844 x 390 board: ~26 mm). The
  *  deck bends by angular speed (deck.js BEND_PER_TURN_PER_S), and the same
@@ -41,10 +55,18 @@ export const RING_BEND_GAIN = 0.35;
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
-/** Fader value change for dPx of drag along a track of lengthPx. */
-export function faderDelta(dPx, lengthPx, fine) {
+/** Fader value change for dPx of drag along a track of lengthPx, divided by
+ *  scale (1 = coarse, fineScale(lengthPx) in fine mode). */
+export function faderDelta(dPx, lengthPx, scale = 1) {
   if (!(lengthPx > 0)) return 0;
-  return dPx / lengthPx / (fine ? TEMPO_FINE_SCALE : 1);
+  return dPx / lengthPx / (scale > 0 ? scale : 1);
+}
+
+/** Fine-mode divisor for a tempo track of travelPx: 1:8 or finer, enough for
+ *  TEMPO_FINE_STEP per pixel at +-6 %. */
+export function fineScale(travelPx) {
+  if (!(travelPx > 0)) return TEMPO_FINE_SCALE;
+  return Math.max(TEMPO_FINE_SCALE, Math.ceil(TEMPO_FINE_SPAN / TEMPO_FINE_STEP / travelPx - 1e-9));
 }
 
 /** Smallest signed difference a1 - a0, in degrees, in (-180, 180]. */
@@ -271,7 +293,7 @@ export class Fader extends Control {
     const d = p - this._last;
     this._last = p;
     const sign = this.spec.dir === "up" ? -1 : 1;
-    const v = clamp01(this.value + sign * faderDelta(d, this._len, this._fine));
+    const v = clamp01(this.value + sign * faderDelta(d, this._len, this._fine ? fineScale(this._len) : 1));
     if (v !== this.value) {
       this.value = v;
       this._show();
@@ -333,7 +355,7 @@ export class Lever extends Control {
   }
 }
 
-/** Jog wheel. Top plate (inner 62 %): {touch: true}, {turn: deg} per move,
+/** Jog wheel. Top plate (inner 80 %): {touch: true}, {turn: deg} per move,
  *  {touch: false}. Outer ring: {ring: deg * RING_BEND_GAIN}. Clockwise > 0. */
 export class Jog extends Control {
   constructor(el, spec, onChange, env) {
@@ -347,7 +369,8 @@ export class Jog extends Control {
     const zone = jogZone(e.clientX - this._c.x, e.clientY - this._c.y, r.width / 2);
     if (!zone) return false;                           // the box's corner, not the wheel
     this._zone = zone;
-    this._a = this._angle(e);
+    this._R = r.width / 2;
+    this._a = this._inHub(e) ? null : this._angle(e);
     this.el.dataset.zone = zone;
     if (zone === "plate") this.onChange({ touch: true });
     return true;
@@ -357,11 +380,17 @@ export class Jog extends Control {
     return (Math.atan2(e.clientY - this._c.y, e.clientX - this._c.x) * 180) / Math.PI;
   }
 
+  _inHub(e) {
+    return Math.hypot(e.clientX - this._c.x, e.clientY - this._c.y) < JOG_HUB_RATIO * this._R;
+  }
+
   move(e) {
-    if (Math.hypot(e.clientX - this._c.x, e.clientY - this._c.y) < 2) return;   // no angle at the hub
+    if (this._inHub(e)) { this._a = null; return; }      // no usable angle at the hub
     const a = this._angle(e);
-    const d = angleDelta(this._a, a);
+    if (this._a === null) { this._a = a; return; }       // back out of the hub: re-anchor, no turn
+    const raw = angleDelta(this._a, a);
     this._a = a;
+    const d = Math.max(-JOG_MAX_STEP_DEG, Math.min(JOG_MAX_STEP_DEG, raw));
     if (!d) return;
     if (this._zone === "plate") {
       this._spin = (this._spin + d) % 360;

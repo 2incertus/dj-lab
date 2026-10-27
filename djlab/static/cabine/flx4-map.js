@@ -30,10 +30,16 @@
 // subY: where the control's SHIFT legend box starts (percent of panel height),
 // measured like the rest; without it the legend sits right under the part.
 // Coordinates: x, y, w, h in percent of the panel (x of its width, y of its
-// height). The board scales them uniformly (BOARD_ASPECT is kept).
+// height). Every part keeps this geometry inside its section
+// (deck 1 | mixer | deck 2); ui/board-layout.js may only spread the sections apart.
 //
 // Legends: label (printed above), face (on the part), sub (the boxed SHIFT
-// legend under it), subPlain (an unboxed legend under it).
+// legend under it), subPlain (an unboxed legend under it). lw / sw / fw / tw:
+// the room the label / sub / face / free legend may take, in percent of the
+// panel's width (default: the part's width plus a little); sh / th: the same
+// for height. The board fits each text into its room (the hardware's legends
+// are tiny, the space between parts decides). Arrows carry U+FE0E so iOS
+// never draws them as emoji.
 //
 // Actions. "<target>.<method>" where target is deck | mixer | fx | sampler |
 // strip | board, and the method is in that target's exported list (DECK_ACTIONS,
@@ -112,18 +118,18 @@ export const DRAWN_ONLY = {
 // ---- deck 1, measured ------------------------------------------------------------
 
 const DECK1 = [
-  { id: "in", kind: "button", label: "IN", sub: "IN ADJ", subY: 14.23, x: 2.94, y: 7.00, w: 3.52, h: 6.35,
+  { id: "in", kind: "button", label: "IN", sub: "IN ADJ", subY: 14.23, sw: 4.4, x: 2.94, y: 7.00, w: 3.52, h: 6.35,
     action: "deck.loopIn", look: "round", lightColour: "orange" },
-  { id: "out", kind: "button", label: "OUT", sub: "OUT ADJ", subY: 14.23, x: 8.23, y: 7.00, w: 3.52, h: 6.35,
+  { id: "out", kind: "button", label: "OUT", sub: "OUT ADJ", subY: 14.23, sw: 4.4, x: 8.23, y: 7.00, w: 3.52, h: 6.35,
     action: "deck.loopOut", look: "round", lightColour: "orange" },
-  { id: "4beat", kind: "button", label: "4 BEAT/EXIT", sub: "ACTIVE", subY: 13.45, x: 14.01, y: 7.90, w: 2.52, h: 4.56,
+  { id: "4beat", kind: "button", label: "4 BEAT/EXIT", sub: "ACTIVE", subY: 13.45, lw: 6.2, sw: 3.2, x: 14.01, y: 7.90, w: 2.52, h: 4.56,
     action: "deck.fourBeatExit", shift: "deck.shiftFourBeatExit", look: "round" },
-  { id: "call-prev", kind: "button", label: "", face: "◀", sub: "DEL", subY: 13.45, x: 19.61, y: 8.45, w: 1.92, h: 3.46,
+  { id: "call-prev", kind: "button", label: "", face: "\u25C0\uFE0E", sub: "DEL", subY: 13.45, sw: 2.4, x: 19.61, y: 8.45, w: 1.92, h: 3.46,
     action: "deck.loopHalve", shift: "board.notYet", look: "round" },
-  { id: "call-next", kind: "button", label: "", face: "▶", sub: "MEMORY", subY: 13.45, x: 23.96, y: 8.45, w: 1.92, h: 3.46,
+  { id: "call-next", kind: "button", label: "", face: "\u25B6\uFE0E", sub: "MEMORY", subY: 13.45, sw: 2.9, x: 23.96, y: 8.45, w: 1.92, h: 3.46,
     action: "deck.loopDouble", shift: "board.notYet", look: "round" },
   { id: "sync", kind: "button", label: "\u2212MASTER", face: "BEAT SYNC", sub: "TEMPO RANGE", subY: 13.45,
-    x: 28.41, y: 7.44, w: 3.06, h: 5.52, action: "deck.syncPress", shift: "deck.cycleRange",
+    lw: 4.6, sw: 5.8, x: 28.41, y: 7.44, w: 3.06, h: 5.52, action: "deck.syncPress", shift: "deck.cycleRange",
     look: "round", lightColour: "orange" },
   { id: "jog", kind: "jog", label: "", x: 2.54, y: 15.30, w: 29.55, h: 53.34,
     action: "deck.jogTurn", touch: "deck.jogTouch", ring: "deck.jogRing" },
@@ -131,16 +137,16 @@ const DECK1 = [
     action: "deck.setShift", hold: true, look: "square" },
   { id: "cue", kind: "button", label: "", face: "CUE", x: 1.97, y: 73.26, w: 5.48, h: 9.89,
     action: "deck.cueDown", up: "deck.cueUp", shift: "deck.shiftCue", look: "big", lightColour: "orange" },
-  { id: "play", kind: "button", label: "", face: "▶/II", sub: "PLAY/PAUSE", subPlain: true,
-    x: 1.97, y: 83.74, w: 5.48, h: 9.89, action: "deck.playPause", shift: "deck.shiftPlayPause",
+  { id: "play", kind: "button", label: "", face: "\u25B6\uFE0E/II", sub: "PLAY/PAUSE", subPlain: true,
+    sw: 7, x: 1.97, y: 83.74, w: 5.48, h: 9.89, action: "deck.playPause", shift: "deck.shiftPlayPause",
     look: "big", lightColour: "green" },
-  { id: "mode-hotcue", kind: "button", face: "HOT CUE", sub: "KEYBOARD", subY: 75.60, x: 8.50, y: 72.44, w: 3.82, h: 2.64,
+  { id: "mode-hotcue", kind: "button", face: "HOT CUE", sub: "KEYBOARD", subY: 75.60, sw: 4.3, fw: 3.5, x: 8.50, y: 72.44, w: 3.82, h: 2.64,
     action: "board.padModeHotCue", shift: "board.notYet", look: "mode" },
-  { id: "mode-padfx1", kind: "button", face: "PAD FX1", sub: "PAD FX2", subY: 75.60, x: 13.11, y: 72.44, w: 3.82, h: 2.64,
+  { id: "mode-padfx1", kind: "button", face: "PAD FX1", sub: "PAD FX2", subY: 75.60, sw: 4.3, fw: 3.5, x: 13.11, y: 72.44, w: 3.82, h: 2.64,
     action: "board.notYet", shift: "board.notYet", look: "mode", v1: false },
-  { id: "mode-beatjump", kind: "button", face: "BEAT JUMP", sub: "BEAT LOOP", subY: 75.60, x: 17.72, y: 72.44, w: 3.82, h: 2.64,
+  { id: "mode-beatjump", kind: "button", face: "BEAT JUMP", sub: "BEAT LOOP", subY: 75.60, sw: 4.3, fw: 3.5, x: 17.72, y: 72.44, w: 3.82, h: 2.64,
     action: "board.padModeBeatJump", shift: "board.padModeBeatLoop", look: "mode" },
-  { id: "mode-sampler", kind: "button", face: "SAMPLER", sub: "KEY SHIFT", subY: 75.60, x: 22.33, y: 72.44, w: 3.82, h: 2.64,
+  { id: "mode-sampler", kind: "button", face: "SAMPLER", sub: "KEY SHIFT", subY: 75.60, sw: 4.3, fw: 3.5, x: 22.33, y: 72.44, w: 3.82, h: 2.64,
     action: "board.padModeSampler", shift: "board.notYet", look: "mode" },
   ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({
     id: `pad${i + 1}`, kind: "pad", label: "", index: i,
@@ -148,7 +154,7 @@ const DECK1 = [
     action: PAD_MODES.hotcue.action, shift: PAD_MODES.hotcue.shift,
   })),
   // the tempo box is the track (66.73 .. 92.07) plus half the cap at each end
-  { id: "tempo", kind: "fader", label: "TEMPO", x: 28.08, y: 63.03, w: 3.68, h: 32.74,
+  { id: "tempo", kind: "fader", label: "TEMPO", lw: 5, x: 28.08, y: 63.03, w: 3.68, h: 32.74,
     cap: { w: 3.68, h: 7.40 }, dir: "down", tempo: true, action: "deck.setTempo", def: 0.5 },
 ];
 
@@ -169,7 +175,7 @@ function channel(n, dx) {
   const ch = (c) => ({ deck: n, section: "mixer", v1: true, ...c, id: `ch${n}-${c.id}`,
     x: Math.round((c.x + dx) * 100) / 100 });
   return [
-    ch({ id: "trim", kind: "knob", label: "TRIM", x: 44.33, y: 11.46, w: 3.04, h: 5.49,
+    ch({ id: "trim", kind: "knob", label: "TRIM", lw: 2.4, x: 44.33, y: 11.46, w: 3.04, h: 5.49,
       action: "mixer.setTrim", def: 0.5, scale: ["-∞", "+9"] }),
     ch({ id: "hi", kind: "knob", label: "HI", band: "hi", x: 44.11, y: 20.18, w: 3.54, h: 6.39,
       action: "mixer.setEq", def: 0.5, detent: true, scale: ["-26", "+6"] }),
@@ -191,21 +197,21 @@ const CH2_DX = 8.29;                // channel 2 strip = channel 1 + 8.29 % in [
 
 const MIXER = [
   { id: "browse", kind: "encoder", label: "", sub: "BACK", subY: 9.03, deck: null, section: "browse", v1: true,
-    x: 47.96, y: 1.44, w: 4.08, h: 7.36, action: "strip.browseMove", press: "strip.openBrowse" },
+    sw: 2.6, x: 47.96, y: 1.44, w: 4.08, h: 7.36, action: "strip.browseMove", press: "strip.openBrowse" },
   { id: "load1", kind: "button", label: "LOAD", deck: null, section: "browse", v1: true,
     x: 41.69, y: 5.10, w: 3.14, h: 2.68, action: "strip.load1", look: "square" },
   { id: "load2", kind: "button", label: "LOAD", sub: "VIEW", subY: 8.44, deck: null, section: "browse", v1: true,
-    x: 55.19, y: 5.10, w: 3.14, h: 2.68, action: "strip.load2", look: "square" },
+    sw: 2.1, x: 55.19, y: 5.10, w: 3.14, h: 2.68, action: "strip.load2", look: "square" },
   ...channel(1, 0),
   ...channel(2, CH2_DX),
   { id: "master-level", kind: "knob", label: "MASTER LEVEL", deck: null, section: "mixer", v1: true,
-    x: 59.75, y: 10.75, w: 4.17, h: 6.57, action: "mixer.setMasterLevel", def: 1, scale: ["-∞", "0"] },
+    lw: 7.4, x: 59.75, y: 10.75, w: 4.17, h: 6.57, action: "mixer.setMasterLevel", def: 1, scale: ["-∞", "0"] },
   { id: "master-cue", kind: "button", face: "CUE", deck: null, section: "mixer", v1: true,
     x: 60.18, y: 22.00, w: 3.27, h: 2.89, action: "mixer.setMasterCue", latch: true, look: "mode" },
   { id: "mic-level", kind: "knob", label: "MIC LEVEL", deck: null, section: "mixer", v1: false,
-    x: 36.40, y: 29.38, w: 3.54, h: 6.38, action: "board.notYet", def: 0, scale: ["-∞", "0"] },
+    lw: 6, x: 36.40, y: 29.38, w: 3.54, h: 6.38, action: "board.notYet", def: 0, scale: ["-∞", "0"] },
   { id: "smart-cfx", kind: "button", face: "SMART CFX", sub: "FX SELECT", subY: 54.19, deck: null, section: "mixer",
-    v1: false, x: 36.67, y: 48.20, w: 3.03, h: 5.47, action: "board.notYet", shift: "board.notYet",
+    v1: false, sw: 4.4, x: 36.67, y: 48.20, w: 3.03, h: 5.47, action: "board.notYet", shift: "board.notYet",
     look: "round", lightColour: "orange" },
   { id: "phones-mix", kind: "knob", label: "MIX", phones: true, deck: null, section: "mixer", v1: true,
     x: 36.40, y: 58.93, w: 3.54, h: 6.39, action: "mixer.setPhonesMix", def: 0.5, scale: ["CUE", "MST"] },
@@ -226,16 +232,16 @@ const FX = [
   { id: "fx-ch", kind: "lever", label: "", x: 59.95, y: 40.27, w: 3.79, h: 2.97,
     action: "fx.setTarget", def: 0,
     positions: [{ label: "1", value: "1" }, { label: "2", value: "2" }, { label: "1&2", value: "master" }] },
-  { id: "fx-select", kind: "button", label: "FX SELECT", face: "▼", sub: "▲", subY: 52.97,
-    x: 60.18, y: 49.50, w: 3.27, h: 2.89, action: "fx.select", arg: 1, shift: "fx.select", shiftArg: -1,
+  { id: "fx-select", kind: "button", label: "FX SELECT", face: "\u25BC\uFE0E", sub: "\u25B2\uFE0E", subY: 52.97,
+    lw: 5.5, x: 60.18, y: 49.50, w: 3.27, h: 2.89, action: "fx.select", arg: 1, shift: "fx.select", shiftArg: -1,
     look: "square" },
-  { id: "fx-beat-down", kind: "button", label: "", face: "◀", sub: "AUTO", subY: 62.13, x: 59.16, y: 58.86, w: 2.31, h: 2.89,
+  { id: "fx-beat-down", kind: "button", label: "", face: "\u25C0\uFE0E", sub: "AUTO", subY: 62.13, sw: 2.8, x: 59.16, y: 58.86, w: 2.31, h: 2.89,
     action: "fx.beat", arg: -1, look: "square" },
-  { id: "fx-beat-up", kind: "button", label: "", face: "▶", sub: "TAP", subY: 62.13, x: 62.18, y: 58.86, w: 2.31, h: 2.89,
+  { id: "fx-beat-up", kind: "button", label: "", face: "\u25B6\uFE0E", sub: "TAP", subY: 62.13, sw: 2.8, x: 62.18, y: 58.86, w: 2.31, h: 2.89,
     action: "fx.beat", arg: 1, look: "square" },
-  { id: "fx-level", kind: "knob", label: "LEVEL/DEPTH", x: 60.09, y: 68.69, w: 3.54, h: 6.39,
+  { id: "fx-level", kind: "knob", label: "LEVEL/DEPTH", lw: 6.8, x: 60.09, y: 68.69, w: 3.54, h: 6.39,
     action: "fx.setLevel", def: 0.5, scale: ["MIN", "MAX"] },
-  { id: "fx-on", kind: "button", label: "ON/OFF", sub: "RELEASE FX", subY: 86.55, x: 60.08, y: 79.53, w: 3.52, h: 6.35,
+  { id: "fx-on", kind: "button", label: "ON/OFF", sub: "RELEASE FX", subY: 86.55, sw: 5.5, x: 60.08, y: 79.53, w: 3.52, h: 6.35,
     action: "fx.toggle", look: "round", lightColour: "orange" },
 ].map((c) => ({ deck: null, section: "fx", v1: true, ...c }));
 
@@ -259,22 +265,22 @@ export const INDICATORS = [
  *  out: at phone size it would cover the 1/2X and 2X legends it groups. */
 export const LEGENDS = [
   ...[0, DECK2_DX].flatMap((dx) => [
-    { text: "CUE/LOOP", x: 22.83 + dx, y: 3.9 },
-    { text: "CALL", x: 22.83 + dx, y: 6.4 },
-    { text: "1/2X", x: 20.57 + dx, y: 12.75, small: true },
-    { text: "2X", x: 24.92 + dx, y: 12.75, small: true },
+    { text: "CUE/LOOP", x: 22.83 + dx, y: 3.9, tw: 5.4 },
+    { text: "CALL", x: 22.83 + dx, y: 6.4, tw: 5.4 },
+    { text: "1/2X", x: 20.57 + dx, y: 12.68, small: true, tw: 2.3, th: 1.45 },
+    { text: "2X", x: 24.92 + dx, y: 12.68, small: true, tw: 2.3, th: 1.45 },
     { text: "\u2212", x: 28.9 + dx, y: 66.3 },
     { text: "0", x: 27.3 + dx, y: 79.4 },
     { text: "+", x: 28.9 + dx, y: 92.4 },
   ]),
-  { text: "PERFORMANCE", x: 39.0, y: 12.9, small: true },
-  { text: "DJ CONTROLLER", x: 39.0, y: 14.9, small: true },
-  { text: "DDJ-FLX4", x: 39.0, y: 18.0, strong: true },
+  { text: "PERFORMANCE", x: 39.0, y: 12.9, small: true, tw: 6.4 },
+  { text: "DJ CONTROLLER", x: 39.0, y: 14.9, small: true, tw: 6.4 },
+  { text: "DDJ-FLX4", x: 39.0, y: 18.0, strong: true, tw: 6.4 },
   { text: "1", x: 45.85, y: 63.85, strong: true },
   { text: "2", x: 54.16, y: 63.85, strong: true },
-  { text: "BEAT FX", x: 61.9, y: 32.9 },
-  { text: "1", x: 60.55, y: 37.6 },
-  { text: "2", x: 61.5, y: 37.6 },
-  { text: "1&2", x: 63.25, y: 37.6 },
-  { text: "BEAT", x: 61.9, y: 56.4 },
+  { text: "BEAT FX", x: 61.9, y: 32.9, tw: 5 },
+  { text: "1", x: 60.55, y: 37.6, tw: 1 },
+  { text: "2", x: 61.5, y: 37.6, tw: 1 },
+  { text: "1&2", x: 63.25, y: 37.6, tw: 2.2 },
+  { text: "BEAT", x: 61.9, y: 56.4, tw: 4 },
 ];

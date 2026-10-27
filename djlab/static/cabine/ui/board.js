@@ -7,7 +7,13 @@
 //             bindings[action](value, control) for every action that is not
 //             the board's own ("board.*"). control carries deck, index, band,
 //             arg. Missing bindings are skipped. Task 10 binds the engine.
-//   opts      {onCrate(): the "caixa" button, onPadMode(deck, mode)}
+//   opts      {onCrate(): the "caixa" button, onPadMode(deck, mode),
+//              layout: "spread" (default) | "exact" (ui/board-layout.js)}
+//
+// The panel is drawn as its three sections (deck 1, mixer, deck 2), each a
+// positioned box; a control's x is relative to its section, so the "spread"
+// layout can move the sections apart while every part inside keeps the
+// photo's position and size.
 //
 // The board itself owns three things, as the hardware does:
 // - SHIFT, per deck and held (it also sends deck.setShift, so the deck can
@@ -20,27 +26,60 @@
 // outside with setLit(id, on | colour), and the meters with setLevel(id, 0..1).
 
 import {
-  CONTROLS as ALL_CONTROLS, INDICATORS, LEGENDS, PAD_MODES, DEFAULT_PAD_MODE,
+  CONTROLS as ALL_CONTROLS, INDICATORS, LEGENDS, PAD_MODES, DEFAULT_PAD_MODE, BOARD_ASPECT,
 } from "../flx4-map.js";
 import { Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever } from "./controls.js";
-import { fitBoard } from "./board-layout.js";
+import { fitBoard, sectionOf, SECTIONS, LAYOUT, LAYOUTS } from "./board-layout.js";
 
 export const NOT_YET_MS = 1200;
 export const NOT_YET_TEXT = "not yet";
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const pct = (v) => `${v}%`;
+const pct = (v) => `${+v.toFixed(4)}%`;
+
+/** Average advance of an uppercase Archivo 600 glyph, in em (measured: 0.62). */
+const CHAR_EM = 0.62;
+
+/** Text fitting: --k is the largest font size, in units of --u (1 % of the
+ *  board's height), that keeps `text` inside `widthPct` of the panel's width
+ *  (and inside `heightPct` of its height when given). The CSS takes the
+ *  smaller of that and the base legend size, so legends never run into their
+ *  neighbours: the FLX4's own legends are tiny, and at phone size the room
+ *  between parts is what decides. */
+function fitK(text, widthPct, heightPct) {
+  const n = Math.max(1, [...String(text).replace(/︎/g, "")].length);
+  let k = (widthPct * BOARD_ASPECT) / (n * CHAR_EM);
+  if (heightPct) k = Math.min(k, heightPct);
+  return k.toFixed(3);
+}
 
 const PHONES_ICON = `<svg class="cab-board-phones" viewBox="0 0 12 10" aria-hidden="true"><path d="M1.5 8V6a4.5 4.5 0 0 1 9 0v2" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="0.6" y="6" width="2.4" height="3.6" rx="0.6" fill="currentColor"/><rect x="9" y="6" width="2.4" height="3.6" rx="0.6" fill="currentColor"/></svg>`;
 
 function legendHtml(c) {
   let h = "";
-  if (c.label) h += `<span class="cab-board-lbl">${c.phones ? PHONES_ICON : ""}${esc(c.label)}</span>`;
+  if (c.label) {
+    const k = fitK(c.label + (c.phones ? "  " : ""), c.lw ?? c.w + 2.4);
+    h += `<span class="cab-board-lbl" style="--k:${k}">${c.phones ? PHONES_ICON : ""}${esc(c.label)}</span>`;
+  }
   if (c.sub) {
-    const at = c.subY !== undefined ? ` style="top:${(((c.subY - c.y) / c.h) * 100).toFixed(2)}%;margin-top:0"` : "";
-    h += `<span class="cab-board-sub${c.subPlain ? " cab-board-sub-plain" : ""}"${at}>${esc(c.sub)}</span>`;
+    const k = fitK(c.sub, (c.sw ?? c.w + 0.8) - (c.subPlain ? 0 : 0.6), c.sh);   // the box's padding and border
+    const at = c.subY !== undefined ? `;top:${(((c.subY - c.y) / c.h) * 100).toFixed(2)}%;margin-top:0` : "";
+    h += `<span class="cab-board-sub${c.subPlain ? " cab-board-sub-plain" : ""}" style="--k:${k}${at}">${esc(c.sub)}</span>`;
   }
   return h;
+}
+
+/** Round faces wrap ("BEAT SYNC" on two lines): fit the longest word. */
+function faceFitText(c) {
+  if (c.look !== "round" && c.look !== "big") return c.face;
+  return c.face.split(" ").reduce((a, b) => (b.length > a.length ? b : a), "");
+}
+
+/** A box in percent of its section (x) and of the panel (y). */
+function boxStyle(b) {
+  const sec = sectionOf(b.x);
+  const span = sec.x1 - sec.x0;
+  return `left:${pct(((b.x - sec.x0) / span) * 100)};top:${pct(b.y)};width:${pct((b.w / span) * 100)};height:${pct(b.h)}`;
 }
 
 function controlHtml(c) {
@@ -75,15 +114,16 @@ function controlHtml(c) {
       inner = "";
       break;
     default:
-      inner = c.face ? `<span class="cab-board-face">${esc(c.face)}</span>` : "";
+      inner = c.face
+        ? `<span class="cab-board-face" style="--k:${fitK(faceFitText(c), c.fw ?? c.w * 0.86, c.h * 0.8)}">${esc(c.face)}</span>`
+        : "";
   }
-  const style = `left:${pct(c.x)};top:${pct(c.y)};width:${pct(c.w)};height:${pct(c.h)}${extra}`;
-  return `<div class="${cls.join(" ")}" data-id="${esc(c.id)}" style="${style}">${inner}${legendHtml(c)}</div>`;
+  return `<div class="${cls.join(" ")}" data-id="${esc(c.id)}" style="${boxStyle(c)}${extra}">${inner}${legendHtml(c)}</div>`;
 }
 
 function indicatorHtml(m) {
   const leds = Array.from({ length: m.leds }, (_, i) => `<i data-led="${m.leds - 1 - i}"></i>`).join("");
-  return `<div class="cab-board-meter" data-id="${esc(m.id)}" style="left:${pct(m.x)};top:${pct(m.y)};width:${pct(m.w)};height:${pct(m.h)}">${leds}</div>`;
+  return `<div class="cab-board-meter" data-id="${esc(m.id)}" style="${boxStyle(m)}">${leds}</div>`;
 }
 
 function legendItemHtml(l) {
@@ -92,7 +132,21 @@ function legendItemHtml(l) {
   if (l.fill) cls.push("cab-board-legend-fill");
   if (l.small) cls.push("cab-board-legend-small");
   if (l.strong) cls.push("cab-board-legend-strong");
-  return `<span class="${cls.join(" ")}" style="left:${pct(l.x)};top:${pct(l.y)}">${esc(l.text)}</span>`;
+  const sec = sectionOf(l.x);
+  const left = ((l.x - sec.x0) / (sec.x1 - sec.x0)) * 100;
+  return `<span class="${cls.join(" ")}" style="left:${pct(left)};top:${pct(l.y)};--k:${fitK(l.text, l.tw ?? 4, l.th)}">${esc(l.text)}</span>`;
+}
+
+/** Everything that sits in one section, as its section's inner HTML. */
+function sectionsHtml(controls) {
+  return SECTIONS.map((sec) => {
+    const inSec = (b) => sectionOf(b.x).key === sec.key;
+    return `<div class="cab-board-sec cab-board-sec-${sec.key}" data-sec="${sec.key}">`
+      + LEGENDS.filter(inSec).map(legendItemHtml).join("")
+      + INDICATORS.filter(inSec).map(indicatorHtml).join("")
+      + controls.filter(inSec).map(controlHtml).join("")
+      + `</div>`;
+  }).join("");
 }
 
 /** Read the safe-area insets (env(), or the --cab-inset-* test overrides). */
@@ -111,11 +165,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         <div class="cab-board-strip-slot"></div>
       </div>
       <div class="cab-board" role="application" aria-label="DDJ-FLX4 board">
-        <span class="cab-board-deckplate" style="left:0;width:34%"></span>
-        <span class="cab-board-deckplate" style="left:66%;width:34%"></span>
-        ${LEGENDS.map(legendItemHtml).join("")}
-        ${INDICATORS.map(indicatorHtml).join("")}
-        ${controls.map(controlHtml).join("")}
+        ${sectionsHtml(controls)}
         <div class="cab-board-toast" role="status" aria-live="polite" hidden></div>
       </div>
       <div class="cab-turn">
@@ -133,6 +183,9 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   const byId = new Map(controls.map((c) => [c.id, c]));
   const els = new Map([...board.querySelectorAll("[data-id]")].map((el) => [el.dataset.id, el]));
   const widgets = new Map();
+  const secEls = new Map([...board.querySelectorAll("[data-sec]")].map((el) => [el.dataset.sec, el]));
+  const mode = LAYOUTS.includes(opts.layout) ? opts.layout : LAYOUT;
+  board.dataset.layout = mode;
   const state = {
     shift: { 1: false, 2: false },
     padMode: { 1: DEFAULT_PAD_MODE, 2: DEFAULT_PAD_MODE },
@@ -282,16 +335,22 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       if (isPortrait) for (const w of widgets.values()) w.release();
     }
     if (isPortrait) return;
-    const f = fitBoard({ W, H, insets: readInsets(probe) });
+    const f = fitBoard({ W, H, insets: readInsets(probe), mode });
     Object.assign(board.style, {
       left: `${f.left}px`, top: `${f.top}px`, width: `${f.width}px`, height: `${f.height}px`,
     });
+    for (const sec of f.sections) {
+      const el = secEls.get(sec.key);
+      el.style.left = `${sec.left}px`;
+      el.style.width = `${sec.width}px`;
+    }
     board.style.setProperty("--u", `${(f.height / 100).toFixed(4)}px`);
     Object.assign(strip.style, {
       left: `${f.safe.left}px`, right: `${f.safe.right}px`, top: `${f.stripTop}px`,
       height: `${f.stripBottom - f.stripTop}px`,
     });
-    screen.dataset.layout = JSON.stringify({ left: f.left, top: f.top, width: f.width, height: f.height });
+    screen.dataset.layout = JSON.stringify({ mode, left: f.left, top: f.top, width: f.width, height: f.height,
+      sections: f.sections.map((x) => ({ key: x.key, left: x.left, width: x.width })) });
   }
   layout();
   on(window, "resize", layout);

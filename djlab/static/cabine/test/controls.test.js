@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever,
   KNOB_SWEEP_PX, TEMPO_FINE_HOLD_MS, TEMPO_FINE_SCALE, JOG_TOP_PLATE_RATIO, RING_BEND_GAIN,
-  angleDelta, jogZone, faderDelta,
+  JOG_HUB_RATIO, JOG_MAX_STEP_DEG, angleDelta, jogZone, faderDelta, fineScale,
 } from "../ui/controls.js";
 import { FakeEl, fakeClock } from "./fake-dom.js";
 
@@ -95,7 +95,11 @@ test("fader_full_length_and_tempo_fine_mode", () => {
   assert.ok(!ch.classList.contains("cab-fine"), "fine mode is the tempo fader's");
   ch.fire("pointermove", 3, 10, 60);
   assert.ok(near(cv.at(-1), 0.5), `up fader: ${cv.at(-1)}`);
-  assert.ok(near(faderDelta(50, 100, false), 0.5));
+  assert.ok(near(faderDelta(50, 100), 0.5));
+  assert.ok(near(faderDelta(50, 100, 10), 0.05));
+  assert.equal(fineScale(200), TEMPO_FINE_SCALE, "1:8 on a long fader");
+  assert.equal(fineScale(70), 9, "finer on the iPhone's ~70 px track");
+  assert.equal(fineScale(64), 10);
 });
 
 test("xfader_is_horizontal", () => {
@@ -148,11 +152,11 @@ test("encoder_turns_in_steps_and_presses_on_tap", () => {
 });
 
 test("jog_radius_split_inner_vs_ring", () => {
-  assert.equal(JOG_TOP_PLATE_RATIO, 0.62);
+  assert.equal(JOG_TOP_PLATE_RATIO, 0.80, "the FLX4's plate edge (ruling R24)");
   assert.ok(RING_BEND_GAIN > 0 && RING_BEND_GAIN < 1);
   assert.equal(jogZone(0, 0, 100), "plate");
-  assert.equal(jogZone(61, 0, 100), "plate");
-  assert.equal(jogZone(63, 0, 100), "ring");
+  assert.equal(jogZone(79, 0, 100), "plate");
+  assert.equal(jogZone(81, 0, 100), "ring");
   assert.equal(jogZone(99, 0, 100), "ring");
   assert.equal(jogZone(80, 80, 100), null, "outside the wheel");
   assert.equal(angleDelta(350, 10), 20);
@@ -184,4 +188,37 @@ test("jog_radius_split_inner_vs_ring", () => {
   el.fire("pointerdown", 3, 5, 5);
   el.fire("pointermove", 3, 50, 5);
   assert.deepEqual(got, []);
+});
+
+test("jog_line_through_the_hub_emits_no_turn", () => {
+  assert.ok(JOG_HUB_RATIO >= 0.15 && JOG_HUB_RATIO <= 0.2);
+  const el = new FakeEl({ left: 0, top: 0, width: 148, height: 148 });   // the iPhone's jog, R 74
+  const got = [];
+  new Jog(el, {}, (e) => got.push(e), fakeClock());
+  // a finger sliding straight left across the center, 4 px right to 4 px left, in 1 px steps
+  el.fire("pointerdown", 1, 78, 74);
+  for (let x = 77; x >= 70; x--) el.fire("pointermove", 1, x, 74);
+  // a 1 px wobble at r = 3 px
+  for (let i = 0; i < 6; i++) el.fire("pointermove", 1, 77, 74 + (i % 2 ? 1 : -1));
+  el.fire("pointerup", 1, 70, 74);
+  assert.deepEqual(got.filter((e) => "turn" in e), [], JSON.stringify(got));
+  assert.deepEqual(got, [{ touch: true }, { touch: false }]);
+
+  // through the hub and out the far side: re-anchors there, then turns normally
+  got.length = 0;
+  el.fire("pointerdown", 2, 74 + 40, 74);                          // r = 40, plate, angle 0
+  el.fire("pointermove", 2, 74, 74);                               // center: dropped
+  el.fire("pointermove", 2, 74 - 40, 74);                          // out at 180 degrees: re-anchor only
+  el.fire("pointermove", 2, 74, 74 - 40);                          // a real quarter turn clockwise (180 -> 270)
+  el.fire("pointerup", 2, 74, 34);
+  const turns = got.filter((e) => "turn" in e).map((e) => e.turn);
+  assert.equal(turns.length, 1);
+  assert.ok(near(turns[0], 90, 1e-6), JSON.stringify(turns));
+
+  // a jump between two events is capped
+  got.length = 0;
+  el.fire("pointerdown", 3, 74 + 50, 74);
+  el.fire("pointermove", 3, 74 - 35, 74 + 35);                     // 135 degrees in one event
+  el.fire("pointerup", 3, 39, 109);
+  assert.equal(got.find((e) => "turn" in e).turn, JOG_MAX_STEP_DEG);
 });
