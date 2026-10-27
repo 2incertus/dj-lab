@@ -219,7 +219,9 @@ def test_sampler_plays_through_the_master_only(proof_page):
     }""")
     print(f"\nsampler: {r}")
     for i, h in enumerate(r["hits"]):
-        assert h > -45, f"pad {i + 1} silent: {r}"
+        # -50 dB, not -45: the rim pad is unseeded noise and once read -45.7 dB
+        # over this 40 ms window; silence is far below either line
+        assert h > -50, f"pad {i + 1} silent: {r}"
     assert r["left"] < -90, f"sampler reached the cue ear with MIX on cue: {r}"
 
 
