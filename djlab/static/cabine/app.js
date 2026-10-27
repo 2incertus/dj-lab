@@ -1,13 +1,17 @@
 // A Cabine: app entry. Opens the phone store, shows the crate (A Caixa) or
 // the board, and keeps carried grids up to date.
 //
-// window.cabine = {store, sync, showCrate(), showBoard()} for later tasks.
-// Portrait is always the crate; landscape shows the board once a deck has a
-// track (Task 10), so with nothing loaded it stays on the crate too.
+// window.cabine = {store, sync, showCrate(), showBoard(), board} for later tasks.
+// The crate works in both orientations. The board is landscape only: in
+// portrait it shows its "turn sideways" card, with a way back to the crate.
+// Rotating to landscape opens the board once a deck has a track (Task 10).
 
 import { openStore } from "./store.js";
 import { makeSync } from "./sync.js";
 import { renderCrate } from "./ui/crate.js";
+import { renderBoard } from "./ui/board.js";
+import { makeDemoBindings } from "./ui/board-demo-bindings.js";
+import { CONTROLS } from "./flx4-map.js";
 
 const root = document.getElementById("cab-root");
 const landscape = window.matchMedia("(orientation: landscape)");
@@ -17,6 +21,7 @@ const app = {
   sync: null,
   screen: null,
   crate: null,
+  board: null,
   decksLoaded: () => false,          // Task 10: true once a deck holds a track
   showCrate,
   showBoard,
@@ -25,6 +30,7 @@ window.cabine = app;
 
 function leave() {
   if (app.crate) { app.crate.destroy(); app.crate = null; }
+  if (app.board) { app.board.destroy(); app.board = null; }
 }
 
 function showCrate() {
@@ -35,30 +41,26 @@ function showCrate() {
   return app.crate.ready;
 }
 
-/** Placeholder until the board lands (Task 9). */
+/** The FLX4 board. Until Task 10 binds the engine it runs on the demo
+ *  bindings (every action logged in app.boardLog, the obvious lights follow). */
 function showBoard() {
   leave();
   app.screen = "board";
   root.dataset.screen = "board";
-  root.innerHTML = `
-    <div class="cab-board-wait">
-      <p class="cab-board-kicker">A Cabine</p>
-      <h1 class="cab-board-h">${landscape.matches ? "The board is coming" : "Turn sideways"}</h1>
-      <p class="cab-board-note">${landscape.matches
-        ? "The FLX4 board is being built. Your carried tracks are safe on the phone."
-        : "The board plays in landscape. Turn the phone on its side."}</p>
-      <button type="button" class="cab-btn cab-btn-terra" id="cab-back-crate">back to A Caixa</button>
-    </div>`;
-  root.querySelector("#cab-back-crate").addEventListener("click", showCrate);
+  const demo = makeDemoBindings();
+  app.board = renderBoard(root, CONTROLS, demo.bindings, {
+    onCrate: () => showCrate(),
+    onPadMode: demo.onPadMode,
+  });
+  demo.attach(app.board);
+  app.boardLog = demo.log;
+  return app.board;
 }
 
 function onOrientation() {
-  if (!landscape.matches) {
-    if (app.screen === "board") showBoard();    // re-render: "turn sideways"
-    return;
-  }
-  if (app.decksLoaded() && app.screen !== "board") showBoard();
-  else if (app.screen === "board") showBoard();
+  // the board lays itself out on rotation (portrait shows its "turn sideways"
+  // card); only an unloaded crate-to-board switch happens here
+  if (landscape.matches && app.decksLoaded() && app.screen !== "board") showBoard();
 }
 
 async function boot() {
