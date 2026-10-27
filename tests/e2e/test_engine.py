@@ -156,3 +156,32 @@ def test_underrun_detector_sees_a_stalled_render_thread(proof_page, carried):
                             {"a": carried["click128"], "b": carried["click120"], "stallMs": 150})
     assert r["before"] == 0, r
     assert r["after"] >= 1, f"a 150 ms stall went unnoticed: {r}"
+
+
+def test_scheduled_start_lands_with_its_seek(proof_page, carried):
+    """play(at) + seek(s, at): silence until frame at, then the track from s,
+    no sound from the old position first (the synced start from pause)."""
+    r = proof_page.evaluate("async (file) => {" + IMPORTS + """
+      const sr = 44100;
+      const ctx = new OfflineAudioContext(2, sr, sr);
+      const track = await loadTrack(ctx, networkSource(), file);
+      const voice = await DeckVoice.create(ctx);
+      voice.connect(ctx.destination);
+      voice.load(track.pcm);
+      voice.seek(0.25);                   // parked ON a click: any early start would sound
+      const at = 0.3, s = 1.1;            // then start at 0.3 s from 1.1 s (next click 1.25)
+      voice.seek(s, at);
+      voice.play(at);
+      await voice.sync();
+      const out = await ctx.startRendering();
+      const L = out.getChannelData(0);
+      const atF = Math.round(at * sr);
+      let before = 0;
+      for (let i = 0; i < atF; i++) before = Math.max(before, Math.abs(L[i]));
+      let k = -1;
+      for (let i = 0; i < L.length; i++) { if (Math.abs(L[i]) > 0.2) { k = i; break; } }
+      return { before, onset: k / sr, expect: at + (1.25 - s) };
+    }""", carried["click120"])
+    print(f"\nscheduled start: silent before {r['before']}, onset {1000 * (r['onset'] - r['expect']):+.3f} ms")
+    assert r["before"] == 0, "sound before the scheduled start"
+    assert abs(r["onset"] - r["expect"]) < 0.001, r

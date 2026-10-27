@@ -260,12 +260,25 @@ export class Deck {
       this._anchor = { s, t: T, rate: this._currentRate() };
     } else {
       st.playing = true;
-      if (!st.jogTouched) {
-        this.voice.setRate(this._playRate());
-        this.voice.play();
+      if (st.jogTouched) {                     // the hand holds the record: just arm play
+        this._anchor = { s, t: T, rate: this._currentRate() };
+        return;
       }
-      this._anchor = { s, t: T, rate: this._currentRate() };
-      if (st.syncOn) this._alignPhase();
+      this.voice.setRate(this._playRate());
+      // Synced start (rekordbox beat sync on play): the start and the phase
+      // jump land on the same frame, SCHEDULE_LEAD_S ahead; nothing sounds
+      // from the unaligned position first.
+      const Ta = T + SCHEDULE_LEAD_S;
+      const aligned = st.syncOn ? this._alignedPos(Ta, s) : null;
+      if (aligned !== null) {
+        this.voice.seek(aligned, Ta);
+        this.voice.play(Ta);
+        this._holdUntil = Ta;
+        this._anchor = { s: aligned, t: Ta, rate: this._currentRate() };
+      } else {
+        this.voice.play();
+        this._anchor = { s, t: T, rate: this._currentRate() };
+      }
     }
   }
 
@@ -451,13 +464,21 @@ export class Deck {
   /** Jump (SCHEDULE_LEAD_S ahead) to the nearest position whose beat phase
    *  matches the master's at that moment: never more than half a beat. */
   _alignPhase() {
-    const m = this._master;
-    if (!m || !m.state.playing || !m.grid || !this.grid) return;
     const T = this.now() + SCHEDULE_LEAD_S;
+    const target = this._alignedPos(T, this.posAt(T));
+    if (target !== null) this._seekAt(target, T);
+  }
+
+  /** Where this deck should be at time T so its beat phase matches the
+   *  (playing) master's: own position s shifted by at most half a beat.
+   *  null when there is nothing to align to. */
+  _alignedPos(T, s) {
+    const m = this._master;
+    if (!m || !m.state.playing || !m.grid || !this.grid) return null;
     const ph = phaseAt(m.grid, m.posAt(T));
-    const bi = beatIndexAt(this.grid, this.posAt(T));
+    const bi = beatIndexAt(this.grid, s);
     const n = Math.round(bi - ph) + ph;
-    this._seekAt(clamp(timeOfBeat(this.grid, n), 0, this._duration), T);
+    return clamp(timeOfBeat(this.grid, n), 0, this._duration);
   }
 
   // ---- loops ------------------------------------------------------------------------

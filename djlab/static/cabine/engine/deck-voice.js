@@ -80,9 +80,12 @@ export class DeckVoice {
 
   setLoop(startS, endS) { this._post({ type: "loop", start: startS, end: endS }); }
 
-  play() { this._post({ type: "run", on: true }); }
+  /** Start now, or at audio-clock time atTime (lands on that exact frame). */
+  play(atTime) {
+    this._post({ type: "run", on: true, at: atTime === undefined ? null : atTime });
+  }
 
-  pause() { this._post({ type: "run", on: false }); }
+  pause() { this._post({ type: "run", on: false, at: null }); }
 
   /** Seconds, as last reported by the worklet (or last seek). */
   get position() { return this._pos; }

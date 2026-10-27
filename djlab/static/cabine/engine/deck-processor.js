@@ -10,7 +10,7 @@
 //               {type:"rate", value, immediate?}
 //               {type:"seek", s, at?}        at = audio-clock time, null = now
 //               {type:"loop", start, end}    seconds, null/null = off
-//               {type:"run", on}
+//               {type:"run", on, at?}        at = audio-clock time, null = now
 //               {type:"ping", id}            answered with {type:"pong", id, s, t, seq}
 //               {type:"stall", ms}           test hook: block the render thread once
 // Messages out: {type:"pos", s, t, seq, pending} every 32 render quanta
@@ -48,6 +48,8 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     this.loopEnd = -1;
     this.seekTo = 0;
     this.seekFrame = -1;           // absolute output frame of a pending jump, -1 = none
+    this.runOn = false;
+    this.runFrame = -1;            // absolute output frame of a pending start/stop, -1 = none
     this.seq = 0;
     this.quanta = 0;
     this.baseline = null;
@@ -73,6 +75,7 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
         this.loopStart = -1;
         this.loopEnd = -1;
         this.seekFrame = -1;
+        this.runFrame = -1;
         this.port.postMessage({ type: "loaded", frames: this.n, seq: this.seq });
         break;
       }
@@ -111,9 +114,17 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
         }
         break;
       }
-      case "run":
-        this.running = !!d.on && this.L !== null;
+      case "run": {
+        const on = !!d.on && this.L !== null;
+        if (d.at === null || d.at === undefined || d.at <= currentTime) {
+          this.running = on;
+          this.runFrame = -1;                    // a later command wins over a pending one
+        } else {
+          this.runOn = on;
+          this.runFrame = Math.round(d.at * sampleRate);
+        }
         break;
+      }
       case "ping":
         this.port.postMessage({ type: "pong", id: d.id, s: this.pos / this.srcRate,
           t: currentTime, seq: this.seq });
@@ -149,6 +160,10 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
       if (this.seekFrame >= 0 && f0 + i >= this.seekFrame) {
         pos = this.seekTo;
         this.seekFrame = -1;
+      }
+      if (this.runFrame >= 0 && f0 + i >= this.runFrame) {   // same frame as a jump due now
+        this.running = this.runOn;
+        this.runFrame = -1;
       }
       if (!this.running) {
         oL[i] = 0;
@@ -206,7 +221,7 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     if (++this.quanta >= POS_EVERY) {
       this.quanta = 0;
       this.port.postMessage({ type: "pos", s: pos / this.srcRate,
-        t: (f0 + frames) / sampleRate, seq: this.seq, pending: this.seekFrame >= 0 });
+        t: (f0 + frames) / sampleRate, seq: this.seq, pending: this.seekFrame >= 0 || this.runFrame >= 0 });
     }
     return true;
   }

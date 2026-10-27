@@ -23,7 +23,7 @@ class FakeVoice {
   setRate(r, immediate = false) { this.calls.push(["rate", r, immediate]); this.rate = r; this.immediate = immediate; }
   seek(s, at) { this.calls.push(["seek", s, at]); this.seeks.push({ s, at }); this.pos = s; }
   setLoop(a, b) { this.calls.push(["loop", a, b]); this.loop = [a, b]; }
-  play() { this.calls.push(["play"]); this.running = true; }
+  play(at) { this.calls.push(["play", at]); this.running = true; this.playAt = at; }
   pause() { this.calls.push(["pause"]); this.running = false; }
   get position() { return this.pos; }
   onposition(cb) { this._cb = cb; }
@@ -204,6 +204,44 @@ test("sync_matches_bpm_and_phase", () => {
   const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
   assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
   assert.ok(Math.abs(s - (5.0 + (at - 3) * 128 / 131)) <= beatPeriod(gB) / 2 + 1e-9, "never jumps more than half a beat");
+});
+
+test("synced_play_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);           // master at phase 0.25
+  vA.report(sA, 3);
+  vB.report(5.0, 3);                           // B paused at its cue
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.playPause();
+  const after = vB.calls.slice(n);
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1];
+  assert.ok(at > 3, "start is scheduled, never 'now': nothing plays before the aligned seek");
+  assert.equal(seeks[0][2], at, "seek and start land on the same audio-clock time");
+  const idxSeek = after.indexOf(seeks[0]), idxPlay = after.indexOf(plays[0]);
+  assert.ok(idxSeek < idxPlay, "the seek is queued before the start");
+  const s = seeks[0][1];
+  const aAt = sA + (at - 3);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.ok(Math.abs(s - 5.0) <= beatPeriod(gB) / 2 + 1e-9, "cue shifted by at most half a beat");
+  assert.ok(near(B.posAt(at), s), "the deck's own model agrees");
+  assert.ok(near(B.posAt(at + 1), s + 128 / 131));
+});
+
+test("unsynced_play_from_pause_starts_now", () => {
+  const { v, d } = setup();
+  d.playPause();
+  const p = v.calls.filter((x) => x[0] === "play");
+  assert.equal(p.length, 1);
+  assert.equal(p[0][1], undefined, "play() with no time = now");
 });
 
 test("sync_follows_master_tempo_and_cancels", () => {
