@@ -46,9 +46,16 @@
 // |                          | lights, roles stay: the follower stays synced and this | review:|
 // |                          | slider drives both. Press again: only this light goes  | rb 6/7)|
 // |                          | off. Phase alignment never leaves an active loop.      |        |
+// |                          | Orphan lit master: if the follower then cancels its own|        |
+// |                          | SYNC (or loads), the master stays lit with nothing     |        |
+// |                          | following; its own SYNC press turns it off. A deck that|        |
+// |                          | presses SYNC meanwhile follows it as usual.            |        |
 // | TEMPO after SYNC off     | Pass-through takeover: the synced tempo is held, slider| B (F1, |
 // |                          | moves are ignored until the slider's tempo reaches or  | CDJ    |
-// |                          | crosses it, then the slider drives with no jump.       | habit) |
+// |                          | crosses it, then the slider drives with no jump. A held| habit) |
+// |                          | tempo beyond the range is taken over when the slider   |        |
+// |                          | hits the stop nearest it (a jump to the range's end).  |        |
+// |                          | A lit master turned off keeps any tempo it was holding.|        |
 // |                          | CONFIRM ON HIS RIG.                                    |        |
 // | IN                       | Sets the loop in point (quantized).                    | M      |
 // | OUT                      | Sets the loop out point, loop playback begins.         | M      |
@@ -490,9 +497,12 @@ export class Deck {
     if (this._master) return;               // a following deck follows its master
     if (this._heldRate !== null) {
       // pass-through takeover: the held (synced) tempo stays until the
-      // slider's own tempo reaches or crosses it, then the slider drives
+      // slider's own tempo reaches or crosses it, then the slider drives.
+      // A held tempo outside the range is taken over at the nearest stop.
       const h = this._heldRate;
-      if ((prev - h) * (this._sliderRate() - h) > 0) return;
+      const span = this.state.range / 100;
+      const atStop = (h > 1 + span && this._fader >= 1) || (h < 1 - span && this._fader <= 0);
+      if (!atStop && (prev - h) * (this._sliderRate() - h) > 0) return;
     }
     this._heldRate = null;
     this._tempoChanged();
@@ -528,7 +538,8 @@ export class Deck {
     if (this._master) this._master._followers.delete(this);
     this._master = null;
     if (this.state.syncOn) {
-      this._heldRate = this._syncRate;
+      // a lit master has no synced rate: keep whatever it was holding
+      if (this._syncRate !== null) this._heldRate = this._syncRate;
       this._syncRate = null;
       this.state.syncOn = false;
     }

@@ -45,6 +45,15 @@ def test_two_decimal_sidecars_stay_valid(tmp_path):
     assert apply_fix(g, "double")["bpm"] == 255.98
 
 
+def test_halve_then_double_round_trips_at_four_decimals():
+    g = {"bpm": 127.9877, "first_beat_s": 0.37, "downbeat_s": 0.37, "beat_cv": 0.01,
+         "reliable": True, "source": "beat_this", "fixed": False}
+    h = apply_fix(g, "halve")
+    assert h["bpm"] == 127.9877 / 2                 # 63.99385: no precision lost
+    assert apply_fix(h, "double")["bpm"] == 127.9877
+    assert apply_fix(apply_fix(g, "double"), "halve")["bpm"] == 127.9877
+
+
 def test_fit_flags_rubato():
     rng = np.random.default_rng(2)
     beats = np.cumsum(rng.uniform(0.35, 0.65, 300))

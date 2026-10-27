@@ -262,6 +262,49 @@ test("sync_follows_master_tempo_and_cancels", () => {
   assert.ok(near(vB.rate, 1.0), "no longer follows");
 });
 
+test("held_rate_survives_lit_master_on_off", () => {
+  const { vA, vB, A, B } = twoDecks(grid(128), grid(131));
+  A.playPause(); B.playPause();
+  A.syncPress(B);                              // A follows B: 131 / 128
+  A.syncPress(B);                              // off: A holds 1.0234
+  const held = 131 / 128;
+  assert.ok(near(vA.rate, held));
+  B.syncPress(A);                              // B follows A (A still on its held rate)
+  assert.ok(near(B.effectiveBpm(), 131));
+  A.syncPress(B);                              // SYNC on the master: lights
+  A.syncPress(B);                              // and off again
+  assert.equal(A.state.syncOn, false);
+  assert.ok(near(A._heldRate, held), `held rate lost: ${A._heldRate}`);
+  assert.ok(near(A.effectiveBpm(), 131), `model and voice disagree: ${A.effectiveBpm()} vs ${vA.rate * 128}`);
+  A.setTempo(0.5001);                          // a tiny slider touch far from the held rate
+  assert.ok(near(vA.rate, held), `A jumped to ${vA.rate}`);
+  assert.ok(near(vB.rate, 1.0), `B jumped to ${vB.rate}`);
+});
+
+test("tempo_slider_takes_over_at_the_end_stop_when_the_held_rate_is_out_of_range", () => {
+  const { vA, A, B } = twoDecks(grid(120), grid(140));
+  A.playPause(); B.playPause();
+  A.syncPress(B);                              // 140 / 120 = 1.1667: beyond +-10
+  A.syncPress(B);
+  const held = 140 / 120;
+  for (const f of [0.5, 0.8, 0.99, 0.3, 0.999]) {
+    A.setTempo(f);
+    assert.ok(near(vA.rate, held), `slider at ${f} must not move the tempo (${vA.rate})`);
+  }
+  A.setTempo(1);                               // the end stop nearest the held rate
+  assert.ok(near(vA.rate, 1.10), `takeover at the stop: ${vA.rate}`);
+  A.setTempo(0.5);
+  assert.ok(near(vA.rate, 1.0), "the slider drives from now on");
+  // below the range: the top (slow) stop takes over
+  const { vA: v2, A: A2, B: B2 } = twoDecks(grid(140), grid(120));
+  A2.playPause(); B2.playPause();
+  A2.syncPress(B2); A2.syncPress(B2);          // holds 0.857
+  A2.setTempo(0.01);
+  assert.ok(near(v2.rate, 120 / 140), `ignored near the stop: ${v2.rate}`);
+  A2.setTempo(0);
+  assert.ok(near(v2.rate, 0.90), `takeover at the top stop: ${v2.rate}`);
+});
+
 test("sync_on_the_master_keeps_the_follower_synced", () => {
   const { vB, A, B } = twoDecks(grid(128), grid(131));
   A.playPause(); B.playPause();

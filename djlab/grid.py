@@ -183,12 +183,14 @@ def apply_fix(g: Grid, op: str, value: float | None = None) -> Grid:
             raise ValueError(f"downbeat must be a time in 0..{MAX_TRACK_S} s")
     out = dict(g)
     period = 60.0 / g["bpm"]
+    # halve / double are exact in binary floating point: no rounding, so a
+    # halve then double gives back the stored BPM to the last digit
     if op == "halve":
-        out["bpm"] = round(g["bpm"] / 2, BPM_DECIMALS)
+        out["bpm"] = g["bpm"] / 2
         # keep the downbeat on the grid: it anchors the surviving beats
         out["first_beat_s"] = _wrap(g["downbeat_s"], 60.0 / out["bpm"])
     elif op == "double":
-        out["bpm"] = round(g["bpm"] * 2, BPM_DECIMALS)
+        out["bpm"] = g["bpm"] * 2
         out["first_beat_s"] = _wrap(g["first_beat_s"], 60.0 / out["bpm"])
     elif op == "nudge":
         if value is None:
