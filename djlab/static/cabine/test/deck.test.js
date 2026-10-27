@@ -872,3 +872,24 @@ test("nothing happens on an empty deck", () => {
   assert.equal(v.calls.length, 0);
   assert.equal(d.state.loaded, false);
 });
+
+// ---- Task 10: unload before a swap -----------------------------------------------
+
+test("unload_empties_the_voice_and_the_deck", () => {
+  const { A, B, vA } = twoDecks(grid(128), grid(131));
+  B.syncPress(A);                                  // B follows A
+  A.state.hotCues[0] = { start: 1, end: null };
+  A.playPause();
+  vA.unloads = 0;
+  vA.unload = () => { vA.unloads++; vA.calls.push(["unload"]); };
+  A.unload();
+  assert.equal(vA.unloads, 1, "the worklet drops its PCM");
+  assert.equal(A.state.loaded, false);
+  assert.equal(A.state.playing, false);
+  assert.equal(A.track, null);
+  assert.deepEqual(A.state.hotCues, new Array(8).fill(null));
+  assert.equal(B.state.syncOn, false, "the follower lets go of an unloaded master");
+  assert.equal(A.effectiveBpm(), null);
+  A.playPause();
+  assert.equal(A.state.playing, false, "nothing to play");
+});

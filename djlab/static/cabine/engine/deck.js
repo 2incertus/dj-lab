@@ -161,6 +161,9 @@ export const FAST_SEARCH_X = 16;
 export const BEND_PER_TURN_PER_S = 0.10;
 export const MAX_BEND = 0.30;
 export const LOOP_ADJUST_S_PER_TURN = 0.5;
+/** How far ahead beat-keeping jumps are scheduled on the audio clock: the
+ *  worklet's message latency max plus a margin. Set from the Task 6
+ *  measurement (the iPhone's number is still to come; 0.03 until then). */
 export const SCHEDULE_LEAD_S = 0.03;
 export const ROLL_MIN_UNIT = 0.25;                     // sub-beat rolls start on a quarter
 const SCRATCH_TAU_S = 0.03;          // the record closes the gap to the finger in ~30 ms
@@ -177,7 +180,7 @@ export const DECK_ACTIONS = [
   "jogTouch", "jogTurn", "jogRing", "setTempo", "cycleRange", "syncPress",
   "loopIn", "loopOut", "fourBeatExit", "shiftFourBeatExit", "loopHalve", "loopDouble",
   "hotCue", "shiftHotCue", "beatJump", "shiftBeatJump", "beatLoop",
-  "setShift", "effectiveBpm", "load", "roll",
+  "setShift", "effectiveBpm", "load", "unload", "roll",
 ];
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -307,6 +310,34 @@ export class Deck {
     this._anchor = { s: 0, t: this.now(), rate: 0 };
     this._holdUntil = -Infinity;
     this._applyRate();
+  }
+
+  /** Empty the deck before a new track is decoded (ruling R19): the worklet
+   *  drops its PCM now, so a swap never holds the old and the new track. A
+   *  follower lets go of it (holding its tempo), as on a load. */
+  unload() {
+    const had = this.state.loaded || this.track !== null;
+    this._clearTimers();
+    this._unsync();
+    for (const f of [...this._followers]) f._unsync();
+    this.track = null;
+    this.grid = null;
+    this._duration = Infinity;
+    this._syncRate = null;
+    this._heldRate = null;
+    this._bend = 0;
+    this._bendVel = 0;
+    this._scratchRate = 0;
+    this._cueLatch = false;
+    this._roll = null;
+    this.state = freshState(this.state.range, this.state.shift);
+    this.state.tempoPct = (this._baseRate() - 1) * 100;
+    if (had) {
+      if (typeof this.voice.unload === "function") this.voice.unload();
+      else this.voice.pause();
+    }
+    this._anchor = { s: 0, t: this.now(), rate: 0 };
+    this._holdUntil = -Infinity;
   }
 
   // ---- transport -----------------------------------------------------------------

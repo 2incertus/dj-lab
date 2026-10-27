@@ -1,5 +1,7 @@
 """A Cabine board (Task 9): the FLX4 top panel on a landscape phone, driven by
-the demo bindings (every action logged in window.cabine.boardLog, no audio).
+the demo bindings (showBoard({demo: true}): every action logged in
+window.cabine.boardLog, no audio; Task 10's engine bindings are tested in
+test_play.py).
 
 Two phones: Mathias's iPhone, 844 x 390 in WebKit with the iPhone's safe-area
 padding emulated through the --cab-inset-* CSS variables (WebKit on Linux has
@@ -54,7 +56,9 @@ def _open_board(ctx, base_url, insets=None, layout=None):
             s.setProperty('--cab-inset-right', i.right + 'px');
             s.setProperty('--cab-inset-bottom', i.bottom + 'px');
         }""", insets)
-    page.evaluate("(m) => window.cabine.showBoard(m ? {layout: m} : {})", layout)
+    # the Task 9 demo bindings: these tests are about the board's touch
+    # handling, with no tracks loaded (test_play.py drives the engine)
+    page.evaluate("(m) => window.cabine.showBoard(m ? {layout: m, demo: true} : {demo: true})", layout)
     page.wait_for_selector(".cab-board .cab-board-ctl", state="attached")
     page.evaluate("() => document.fonts && document.fonts.ready")
     page.errors = errors

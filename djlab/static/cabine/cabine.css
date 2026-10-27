@@ -236,6 +236,31 @@
 }
 .cab-board-caixa:focus-visible, .cab-turn-caixa:focus-visible { outline: 2px solid #ff9d3c; outline-offset: 2px; }
 
+/* the strip's contents (Task 10, ui/strip.js): canvas, browse list, REC */
+.cab-board-strip .cab-board-strip-slot { position: relative; overflow: hidden; border-radius: 0 0 8px 8px; }
+.cab-strip-canvas { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
+.cab-strip-browse {
+  position: absolute; z-index: 1; overflow: hidden; background: #0b0b0d;
+  border-left: 1px solid #2a2a2e; border-right: 1px solid #2a2a2e; touch-action: none;
+}
+.cab-strip-browse[hidden] { display: none; }
+.cab-strip-list { list-style: none; margin: 0; padding: 0; }
+.cab-strip-row, .cab-strip-empty {
+  display: flex; gap: 8px; align-items: center; height: 15px; padding: 0 6px;
+  font: 600 10px/15px "Archivo", system-ui, sans-serif; color: #bdbdc2; white-space: nowrap;
+}
+.cab-strip-row.cab-hl { background: #2b4a6b; color: #fff; }
+.cab-strip-t { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.cab-strip-m { flex: 0 0 auto; color: #8d8d92; font-variant-numeric: tabular-nums; }
+.cab-strip-row.cab-hl .cab-strip-m { color: #d8e6f5; }
+.cab-strip-empty { color: #8d8d92; }
+.cab-strip-rec {
+  position: absolute; z-index: 1; font: 700 10px/1 "Archivo", system-ui, sans-serif; letter-spacing: 0.06em;
+  color: #6c6c70; background: #151517; border: 1px solid #333337; border-radius: 6px; padding: 0;
+  touch-action: manipulation;
+}
+.cab-strip-rec:disabled { cursor: default; }
+
 .cab-board {
   position: absolute; --u: 3px; --fs: max(5px, calc(var(--u) * 1.85));
   background: #2a2a2b; border-radius: calc(var(--u) * 2.5);
@@ -314,6 +339,16 @@
 .cab-look-mode.cab-lit .cab-board-face { color: #ffad5c; }
 .cab-blink { animation: cab-blink 0.9s steps(1) infinite; }
 @keyframes cab-blink { 50% { box-shadow: 0 0 0 1px #0b0b0c, inset 0 0 0 1px #6c6c6e; } }
+/* engine lights (Task 10): PLAY paused at the cue point, IN / OUT being adjusted */
+/* (the dark half repeats each look's unlit style, so legends stay steady) */
+.cab-look-big.cab-flash { animation: cab-flash-big 0.9s steps(1) infinite; }
+@keyframes cab-flash-big { 50% { box-shadow: 0 0 0 1px #000, inset 0 0 0 calc(var(--u) * 0.45) #2f6b2a; } }
+.cab-look-round.cab-flash { animation: cab-flash-round 0.9s steps(1) infinite; }
+@keyframes cab-flash-round { 50% {
+  background: radial-gradient(circle at 50% 38%, #7a5330 0, #5b3b20 52%, #1c1612 68%);
+  box-shadow: 0 0 0 1px #0b0b0c, inset 0 0 0 1px #59595c; } }
+/* the sync master: its MASTER legend lights */
+.cab-master .cab-board-lbl { color: #ff9d3c; }
 
 /* small square buttons (SHIFT, LOAD, FX SELECT, BEAT) */
 .cab-look-square {

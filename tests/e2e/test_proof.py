@@ -17,9 +17,11 @@ def test_measurements_panel_reports_the_checkpoint_numbers(proof_page, carried):
     assert "outputLatencyMs" in r, r
     # decoded vs expected from the library's exact source frame count
     assert r["samples"] == 20 * 44100, r                 # the 20 s click120 fixture
-    assert abs(r["expectedFrames"] - 20 * r["sampleRate"]) < 1, r
+    # the loader decodes at the file's 44.1 kHz (Task 10): raw decode vs source
+    assert r["expectedFrames"] == 20 * 44100, r
     assert abs(r["extraFrames"]) <= 2, f"Chromium trims the LAME delay: {r}"
     assert abs(r["headOffsetSamples44k"]) <= 2, r
+    assert r["gapless"]["action"] == "exact" and r["playedFrames"] == 20 * 44100, r
     # first click vs the grid's first beat (0.25 s), through the voice
     assert abs(r["onsetMinusGridMs"]) < 1, r
     # 200 pings through DeckVoice.sync()

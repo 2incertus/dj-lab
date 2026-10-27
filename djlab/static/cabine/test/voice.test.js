@@ -80,3 +80,25 @@ test("voice_test_hooks_on_request", async () => {
   node.port.onmessage({ data: { type: "pong", id: ping.id, s: 1.5, t: 2 } });
   assert.deepEqual(await p, { s: 1.5, t: 2 });
 });
+
+test("voice_unload_sends_an_empty_load_and_the_worklet_drops_the_pcm", () => {
+  const v = new DeckVoice({});
+  const node = nodes[nodes.length - 1];
+  v.load({ left: new Int16Array(4), right: new Int16Array(4), sampleRate: 44100 });
+  v.unload();
+  const m = node.sent[node.sent.length - 1];
+  assert.equal(m.type, "load");
+  assert.equal(m.left.length, 0);
+  assert.equal(v.duration, 0);
+
+  const p = new Processor({ processorOptions: {} });
+  p.port.onmessage({ data: { type: "load", left: new Int16Array(1000).fill(1000), right: new Int16Array(1000), sampleRate: 48000 } });
+  p.port.onmessage({ data: { type: "run", on: true } });
+  p.port.onmessage({ data: { type: "load", left: new Int16Array(0), right: new Int16Array(0), sampleRate: 0 } });
+  assert.equal(p.L, null, "the old PCM is released");
+  assert.equal(p.n, 0);
+  p.port.onmessage({ data: { type: "run", on: true } });
+  const out = [[new Float32Array(128), new Float32Array(128)]];
+  p.process([], out);
+  assert.ok(out[0][0].every((x) => x === 0), "an unloaded deck is silent");
+});

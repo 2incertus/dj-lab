@@ -164,3 +164,17 @@ test("storeSource offers the loader's getMp3 / getGrid / getMeta from the store"
   assert.equal(await src.getGrid("missing.wav"), null);
   assert.deepEqual(await src.getMeta("missing.wav"), { file: "missing.wav" });
 });
+
+test("storeSource_hands_the_loader_saved_hot_cues_and_peaks", async () => {
+  const { store } = await fresh();
+  await store.putTrack({ file: "a.wav", meta: meta("a.wav"), grid, peaks: bytes(7, 8), mp3: bytes(4, 5) });
+  const cues = [{ start: 1.5, end: null }, null, null, null, null, null, null, { start: 2, end: 3 }];
+  await store.putHotCues("a.wav", cues);
+  const src = storeSource(store);
+  assert.deepEqual(await src.getHotCues("a.wav"), cues);
+  assert.equal(await src.getHotCues("b.wav"), null);
+  await src.getMp3("a.wav");
+  assert.deepEqual([...new Uint8Array(await src.getPeaks("a.wav"))], [7, 8], "peaks from the same read");
+  assert.deepEqual([...new Uint8Array(await src.getPeaks("a.wav"))], [7, 8], "and on their own");
+  assert.equal(await src.getPeaks("missing.wav"), null);
+});

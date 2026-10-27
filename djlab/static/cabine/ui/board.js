@@ -1,8 +1,8 @@
 // A Cabine: the board. Draws flx4-map's CONTROLS on a landscape screen, wires
 // each to a touch widget (ui/controls.js) and routes it to an action.
 //
-// renderBoard(root, CONTROLS, bindings, opts) -> {setLit, setLevel, notYet,
-//   padMode, shift, widget, destroy}
+// renderBoard(root, CONTROLS, bindings, opts) -> {setLit, setBlink, setMark,
+//   setLatch, setLevel, notYet, padMode, shift, widget, stripSlot, destroy}
 //   bindings  {"deck.cueDown": (value, control) => ..., ...}: the board calls
 //             bindings[action](value, control) for every action that is not
 //             the board's own ("board.*"). control carries deck, index, band,
@@ -23,7 +23,10 @@
 //   the mode button;
 // - the latching buttons (channel CUE, MASTER CUE), lit while on.
 // Everything else that lights (PLAY, CUE, SYNC, pads, ON/OFF...) is lit from
-// outside with setLit(id, on | colour), and the meters with setLevel(id, 0..1).
+// outside with setLit(id, on | colour), flashed with setBlink(id, on), the
+// sync master's MASTER legend lit with setMark(id, on), and the meters with
+// setLevel(id, 0..1). setLatch(id, on) puts a latching button (channel CUE,
+// MASTER CUE) back in step with the engine when the board is drawn again.
 
 import {
   CONTROLS as ALL_CONTROLS, INDICATORS, LEGENDS, PAD_MODES, DEFAULT_PAD_MODE, BOARD_ASPECT,
@@ -203,6 +206,22 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     else el.style.removeProperty("--lit");
   }
 
+  function setBlink(id, on) {
+    const el = els.get(id);
+    if (el) el.classList.toggle("cab-flash", !!on);
+  }
+
+  function setMark(id, on) {
+    const el = els.get(id);
+    if (el) el.classList.toggle("cab-master", !!on);
+  }
+
+  function setLatch(id, on) {
+    if (!byId.has(id)) return;
+    state.latch[id] = !!on;
+    setLit(id, !!on);
+  }
+
   function setLevel(id, v) {
     const el = els.get(id);
     if (!el) return;
@@ -378,8 +397,12 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     el: screen,
     board,
     setLit,
+    setBlink,
+    setMark,
+    setLatch,
     setLevel,
     notYet,
+    stripSlot: strip.querySelector(".cab-board-strip-slot"),
     padMode: (deck) => state.padMode[deck],
     shift: (deck) => state.shift[deck],
     widget: (id) => widgets.get(id),

@@ -196,12 +196,16 @@ export async function openStore(opts = {}) {
   return new Store(db, { storage, now: opts.now });
 }
 
-/** The loader's source interface (engine/loader.js) over the store: offline play. */
+/** The loader's source interface (engine/loader.js) over the store: offline
+ *  play. getMp3 reads the audio record once and keeps its peaks for the
+ *  getPeaks call that follows (the loader asks for both). */
 export function storeSource(store) {
+  const peaks = new Map();
   return {
     async getMp3(file) {
       const t = await store.getTrack(file);
       if (!t) throw new Error(`${file} is not on this phone`);
+      peaks.set(file, t.peaks);
       return t.mp3;
     },
     async getGrid(file) {
@@ -211,6 +215,18 @@ export function storeSource(store) {
     async getMeta(file) {
       const e = await store.getEntry(file);
       return (e && e.meta) || { file };
+    },
+    getHotCues(file) {
+      return store.getHotCues(file);
+    },
+    async getPeaks(file) {
+      if (peaks.has(file)) {
+        const p = peaks.get(file);
+        peaks.delete(file);
+        return p;
+      }
+      const t = await store.getTrack(file);
+      return t ? t.peaks : null;
     },
   };
 }

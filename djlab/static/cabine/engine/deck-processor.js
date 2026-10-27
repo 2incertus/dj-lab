@@ -6,7 +6,8 @@
 // cubic Hermite (Catmull-Rom) interpolated; rate changes ramp over 5 ms
 // unless sent with immediate:true (scratching).
 //
-// Messages in:  {type:"load", left, right, sampleRate?} (buffers transferred)
+// Messages in:  {type:"load", left, right, sampleRate?} (buffers transferred;
+//                empty arrays = unload: the PCM is dropped, nothing plays)
 //               {type:"rate", value, immediate?}
 //               {type:"seek", s, at?}        at = audio-clock time, null = now
 //               {type:"loop", start, end, at?} seconds, null/null = off; at as seek
@@ -71,9 +72,11 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     this.seq++;
     switch (d.type) {
       case "load": {
-        this.L = d.left;
-        this.R = d.right || d.left;
-        this.n = Math.min(this.L.length, this.R.length);
+        // an empty load (DeckVoice.unload) lets go of the track's PCM
+        const empty = !d.left || d.left.length === 0;
+        this.L = empty ? null : d.left;
+        this.R = empty ? null : (d.right || d.left);
+        this.n = empty ? 0 : Math.min(this.L.length, this.R.length);
         this.srcRate = d.sampleRate > 0 ? d.sampleRate : sampleRate;
         this.step = this.srcRate / sampleRate;
         this.pos = 0;

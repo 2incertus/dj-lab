@@ -1,6 +1,6 @@
 // A Cabine: the main-thread side of one deck's AudioWorklet player.
-// Implements the voice interface the Deck drives (deck.js): load, setRate,
-// seek, setLoop, play, pause, position, onposition, underruns.
+// Implements the voice interface the Deck drives (deck.js): load, unload,
+// setRate, seek, setLoop, play, pause, position, onposition, underruns.
 
 export const PROCESSOR_URL = "/static/cabine/engine/deck-processor.js";
 
@@ -73,6 +73,13 @@ export class DeckVoice {
     if (right && right.buffer !== left.buffer) transfer.push(right.buffer);
     this._pos = 0;
     this._post({ type: "load", left, right: right || left, sampleRate }, transfer);
+  }
+
+  /** Drop the track: the worklet gets an empty load and lets go of its PCM. */
+  unload() {
+    this.duration = 0;
+    this._pos = 0;
+    this._post({ type: "load", left: new Int16Array(0), right: new Int16Array(0), sampleRate: 0 });
   }
 
   setRate(r, immediate = false) { this._post({ type: "rate", value: r, immediate: !!immediate }); }

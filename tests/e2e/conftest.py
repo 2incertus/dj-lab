@@ -84,6 +84,9 @@ CLICK_TRACKS = {
     # name: (bpm, first_beat_s, seconds)
     "cabine-e2e-click120.wav": (120.0, 0.25, 20.0),
     "cabine-e2e-click128.wav": (128.0, 0.1, 60.0),
+    # Task 10 sync drift: two tempos, long enough to render 120 s synced
+    "cabine-e2e-click128-130.wav": (128.0, 0.1, 130.0),
+    "cabine-e2e-click131.wav": (131.0, 0.12, 130.0),
 }
 LONG_TRACK = "cabine-e2e-long14.wav"      # click128 looped to 14 minutes
 LONG_SECONDS = 840.0
@@ -156,6 +159,7 @@ def cabine_tracks():
         tmp.write_text(_json.dumps(entries, indent=1))
         tmp.replace(aj)
     return {"click120": "cabine-e2e-click120.wav", "click128": "cabine-e2e-click128.wav",
+            "click128_130": "cabine-e2e-click128-130.wav", "click131": "cabine-e2e-click131.wav",
             "long14": LONG_TRACK, "grids": {n: _grid_for(b, f) for n, (b, f, _s) in specs.items()}}
 
 
@@ -165,7 +169,7 @@ def carried(cabine_tracks, playwright_instance, base_url, auth_cookie):
     req = playwright_instance.request.new_context(
         base_url=base_url,
         extra_http_headers={"Cookie": f"dj_auth={auth_cookie['value']}"})
-    for key in ("click120", "click128", "long14"):
+    for key in ("click120", "click128", "click128_130", "click131", "long14"):
         r = req.get(f"/api/cabine/carry?file={cabine_tracks[key]}", timeout=300_000)
         assert r.ok, f"carry {key}: {r.status}"
     req.dispose()
@@ -285,3 +289,61 @@ def crate_page(phone_context, base_url, crate_tracks):
     page.evaluate("() => window.cabine.crate.ready")
     yield page
     page.close()
+
+
+# ---- A Cabine play fixtures (Task 10) -------------------------------------------
+#
+# Two sine tracks the master can tell apart by frequency: A is a 110 Hz bass
+# (deck 1), B a 70 Hz sub plus a 2 kHz tone (deck 2). With grids, so SYNC
+# works. Registered in the crate like the click tracks; carried per test into
+# the page's own IndexedDB.
+
+TONE_TRACKS = {
+    # name: (bpm, first_beat_s, seconds, [(hz, amp), ...])
+    "cabine-e2e-tone-a.wav": (128.0, 0.1, 40.0, [(110.0, 0.5)]),
+    "cabine-e2e-tone-b.wav": (127.0, 0.2, 40.0, [(70.0, 0.4), (2000.0, 0.25)]),
+}
+
+
+def _write_tones(path: Path, tones, seconds: float) -> None:
+    import numpy as np
+    t = np.arange(int(seconds * SR)) / SR
+    y = sum(a * np.sin(2 * np.pi * hz * t) for hz, a in tones)
+    pcm = (np.clip(y, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(np.repeat(pcm, 2).tobytes())
+
+
+@pytest.fixture(scope="session")
+def play_tracks(carried, playwright_instance, base_url, auth_cookie):
+    """The tone tracks, registered, gridded and warmed on the server, plus
+    the click fixtures from `carried`."""
+    TECHNO.mkdir(parents=True, exist_ok=True)
+    for name, (bpm, first, secs, tones) in TONE_TRACKS.items():
+        p = TECHNO / name
+        if not p.exists():
+            _write_tones(p, tones, secs)
+        (TECHNO / (name + ".grid.json")).write_text(_json.dumps(_grid_for(bpm, first), indent=2))
+    aj = ROOT / "analysis.json"
+    entries = _json.loads(aj.read_text()) if aj.exists() else []
+    have = {Path(str(e.get("file", ""))).name for e in entries}
+    new = [{"file": str(TECHNO / n), "duration_s": s, "bpm": b, "beat_cv": 0.0,
+            "key": "A min" if n.endswith("a.wav") else "F min", "camelot": "8A",
+            "note": "e2e fixture (A Cabine play tests)"}
+           for n, (b, _f, s, _t) in TONE_TRACKS.items() if n not in have]
+    if new:
+        tmp = aj.with_name(aj.name + ".e2e.tmp")
+        tmp.write_text(_json.dumps(entries + new, indent=1))
+        tmp.replace(aj)
+    req = playwright_instance.request.new_context(
+        base_url=base_url,
+        extra_http_headers={"Cookie": f"dj_auth={auth_cookie['value']}"})
+    for name in TONE_TRACKS:
+        for route in ("carry", "peaks"):
+            r = req.get(f"/api/cabine/{route}?file={name}", timeout=300_000)
+            assert r.ok, f"{route} {name}: {r.status}"
+    req.dispose()
+    return {**carried, "tone_a": "cabine-e2e-tone-a.wav", "tone_b": "cabine-e2e-tone-b.wav"}

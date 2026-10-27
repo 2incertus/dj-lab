@@ -346,10 +346,15 @@
         return withTimeout(loadTrack(ctx, source, file), 60000, "fetch and decode");   // the deck's own path
       });
       if (track) {
-        r.decodedFrames = track.pcm.left.length;
-        r.expectedFrames = r.samples === null ? null : r.samples * ctx.sampleRate / SOURCE_RATE;
+        // since Task 10 the loader decodes at the file's own 44.1 kHz and its
+        // gapless guard trims what the decoder left in: report the raw decode
+        // (what this browser's decoder does) and the guard's decision
+        r.decodedFrames = track.gapless.decoded;
+        r.expectedFrames = r.samples;
         r.extraFrames = r.expectedFrames === null ? null : r.decodedFrames - r.expectedFrames;
-        r.headOffsetSamples44k = r.extraFrames === null ? null : r.extraFrames * SOURCE_RATE / ctx.sampleRate;
+        r.headOffsetSamples44k = r.extraFrames;
+        r.gapless = { action: track.gapless.action, head: track.gapless.head, tail: track.gapless.tail };
+        r.playedFrames = track.pcm.left.length;
       }
       const on = track ? await step(r, "onset", () => onsetMinusGrid(track, ctx.sampleRate, r)) : null;
       if (!track) r.errors.onset = "no decoded track";
@@ -366,8 +371,9 @@
         `file ${file}`,
         `sampleRate ${r.sampleRate} Hz, baseLatency ${f(r.baseLatencyMs, 2)} ms, outputLatency ${f(r.outputLatencyMs, 2)} ms`,
         why("decode") ? `decoded frames: ${why("decode")}` :
-          `decoded ${r.decodedFrames} frames, expected ${f(r.expectedFrames, 1)} (samples ${r.samples ?? "n/a"} x ${r.sampleRate} / ${SOURCE_RATE})`,
-        why("decode") ? null : `  decoded - expected = ${f(r.extraFrames, 1)} frames = ${f(r.headOffsetSamples44k, 1)} samples at 44.1 kHz`,
+          `decoded ${r.decodedFrames} frames at ${SOURCE_RATE} Hz, source ${r.samples ?? "n/a"} frames`,
+        why("decode") ? null : `  decoded - source = ${f(r.extraFrames, 0)} frames; gapless guard: ${r.gapless.action}`
+          + ` (head ${r.gapless.head}, tail ${r.gapless.tail}), the deck plays ${r.playedFrames} frames`,
         `  (0 = encoder delay trimmed; untrimmed LAME is about +1105 at the head plus padding)`,
         `first onset - grid first beat = ${why("onset") || `${f(r.onsetMinusGridMs, 3)} ms`} (${ONSET_RENDER_S} s render through the deck voice)`,
         `  (meaningful only on a click fixture: the first loud sample is taken as the first beat)`,
