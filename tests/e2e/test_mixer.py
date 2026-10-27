@@ -1,0 +1,260 @@
+"""A Cabine mixer, Beat FX and sampler, rendered offline in a real browser.
+
+Oscillators and impulses stand in for the decks. Chromium only (ruling R8).
+The modules are served from /static/; the gated proof page is just a page
+to run them in.
+"""
+
+IMPORTS = """
+  const M = await import('/static/cabine/engine/mixer.js');
+  const F = await import('/static/cabine/engine/fx.js');
+  const S = await import('/static/cabine/engine/sampler.js');
+  const SR = 48000;
+  const rmsDb = (a, t0, t1) => {
+    const i0 = Math.round(t0 * SR), i1 = Math.round(t1 * SR);
+    let e = 0;
+    for (let i = i0; i < i1; i++) e += a[i] * a[i];
+    const r = Math.sqrt(e / (i1 - i0));
+    return r > 0 ? 20 * Math.log10(r) : -400;
+  };
+  // level of one frequency in a window (Goertzel), as dBFS of a sine's peak
+  const toneDb = (a, hz, t0, t1) => {
+    const i0 = Math.round(t0 * SR), i1 = Math.round(t1 * SR), n = i1 - i0;
+    const w = 2 * Math.PI * hz / SR;
+    let re = 0, im = 0;
+    for (let i = 0; i < n; i++) { re += a[i0 + i] * Math.cos(w * i); im -= a[i0 + i] * Math.sin(w * i); }
+    const amp = 2 * Math.sqrt(re * re + im * im) / n;
+    return amp > 0 ? 20 * Math.log10(amp) : -400;
+  };
+  const osc = (ctx, hz, amp) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = hz; g.gain.value = amp;
+    o.connect(g); o.start();
+    return g;
+  };
+"""
+
+
+def test_split_cue_left_is_cue_right_is_master(proof_page):
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      // the brief's case: deck 1 CUE on, its fader down, nothing else
+      let ctx = new OfflineAudioContext(2, SR, SR);
+      let m = new M.Mixer(ctx);
+      m.output.connect(ctx.destination);
+      osc(ctx, 440, 0.5).connect(m.channel(1).input);
+      m.channel(1).setCue(true);
+      m.channel(1).setFader(0);
+      let out = await ctx.startRendering();
+      const solo = { left: rmsDb(out.getChannelData(0), 0.3, 1), right: rmsDb(out.getChannelData(1), 0.3, 1) };
+
+      // both decks: 1 cued with its fader down, 2 on air and not cued, MIX full to cue
+      ctx = new OfflineAudioContext(2, SR, SR);
+      m = new M.Mixer(ctx);
+      m.output.connect(ctx.destination);
+      osc(ctx, 440, 0.5).connect(m.channel(1).input);
+      osc(ctx, 1000, 0.5).connect(m.channel(2).input);
+      m.channel(1).setCue(true);
+      m.channel(1).setFader(0);
+      m.channel(2).setFader(1);
+      m.setPhonesMix(0);
+      out = await ctx.startRendering();
+      const L = out.getChannelData(0), R = out.getChannelData(1);
+      const both = { l440: toneDb(L, 440, 0.3, 1), l1k: toneDb(L, 1000, 0.3, 1),
+                     r440: toneDb(R, 440, 0.3, 1), r1k: toneDb(R, 1000, 0.3, 1) };
+
+      // MIX full to master puts the master in the left ear too
+      ctx = new OfflineAudioContext(2, SR, SR);
+      m = new M.Mixer(ctx);
+      m.output.connect(ctx.destination);
+      osc(ctx, 440, 0.5).connect(m.channel(1).input);
+      osc(ctx, 1000, 0.5).connect(m.channel(2).input);
+      m.channel(1).setCue(true);
+      m.channel(1).setFader(0);
+      m.setPhonesMix(1);
+      out = await ctx.startRendering();
+      const mixM = { l440: toneDb(out.getChannelData(0), 440, 0.3, 1),
+                     l1k: toneDb(out.getChannelData(0), 1000, 0.3, 1) };
+      return { solo, both, mixM };
+    }""")
+    print(f"\nsplit cue: {r}")
+    assert r["solo"]["left"] > -30, r
+    assert r["solo"]["right"] < -60, r
+    b = r["both"]
+    assert b["l440"] > -30 and b["r1k"] > -30, r            # cue left, master right
+    assert b["l1k"] < -60, f"master leaked into the cue ear: {r}"
+    assert b["r440"] < -60, f"cue leaked into the master ear: {r}"
+    assert r["mixM"]["l1k"] > -30 and r["mixM"]["l440"] < -60, r
+
+
+def test_low_kill_removes_sub(proof_page):
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      async function render(hz, low) {
+        const ctx = new OfflineAudioContext(2, SR, SR);
+        const m = new M.Mixer(ctx);
+        m.output.connect(ctx.destination);
+        osc(ctx, hz, 0.5).connect(m.channel(1).input);
+        m.setCrossfader(0);
+        if (low !== null) m.channel(1).setEq('low', low);
+        const out = await ctx.startRendering();
+        return toneDb(out.getChannelData(1), hz, 0.4, 1);
+      }
+      return {
+        sub: await render(60, 0.5), subKilled: await render(60, 0),
+        hi: await render(5000, 0.5), hiWithLowKilled: await render(5000, 0),
+        sub3: await render(60, 1),
+        flat: [await render(250, null), await render(800, null), await render(2500, null)],
+      };
+    }""")
+    print(f"\nlow kill: {r}")
+    assert abs(r["sub"] - 20 * __import__("math").log10(0.5)) < 0.5, f"isolator not flat at center: {r}"
+    assert r["sub"] - r["subKilled"] > 40, f"60 Hz only dropped {r['sub'] - r['subKilled']:.1f} dB"
+    assert abs(r["hi"] - r["hiWithLowKilled"]) < 0.5, f"low kill touched 5 kHz: {r}"
+    assert abs(r["sub3"] - r["sub"] - 6) < 0.5, f"full LOW boost is not +6 dB: {r}"
+    for db in r["flat"]:                                       # at and between the crossovers
+        assert abs(db - r["sub"]) < 0.5, f"isolator not flat at center: {r}"
+
+
+def test_beat_fx_delay_time_tracks_bpm(proof_page):
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      async function render(bpm) {
+        const ctx = new OfflineAudioContext(2, SR, SR);
+        const m = new M.Mixer(ctx);
+        m.output.connect(ctx.destination);
+        const buf = ctx.createBuffer(1, SR, SR);
+        buf.getChannelData(0)[Math.round(0.3 * SR)] = 1;           // impulse at 0.3 s
+        const src = ctx.createBufferSource();
+        src.buffer = buf; src.connect(m.channel(1).input); src.start();
+        const fx = new F.BeatFx(ctx, m, () => bpm, { decks: [] });
+        fx.beat(-1); fx.beat(-1);                                    // 1 -> 3/4 -> 1/2
+        fx.setLevel(1);
+        fx.setOn(true);
+        const out = await ctx.startRendering();
+        const R = out.getChannelData(1);
+        const argmax = (t0, t1) => {
+          let k = -1, best = 0;
+          for (let i = Math.round(t0 * SR); i < Math.round(t1 * SR); i++) {
+            if (Math.abs(R[i]) > best) { best = Math.abs(R[i]); k = i; }
+          }
+          return { k, best };
+        };
+        const dry = argmax(0.25, 0.45), wet = argmax(0.47, 0.95);
+        return { fraction: fx.state.fraction, name: fx.state.name,
+                 delayMs: 1000 * (wet.k - dry.k) / SR, dry: dry.best, wet: wet.best };
+      }
+      return { b128: await render(128), b100: await render(100) };
+    }""")
+    print(f"\ndelay: {r}")
+    for key, want in (("b128", 234.375), ("b100", 300.0)):
+        x = r[key]
+        assert x["name"] == "Delay" and x["fraction"] == 0.5, x
+        assert x["wet"] > 0.5 * x["dry"], f"no repeat: {x}"
+        assert abs(x["delayMs"] - want) < 2, f"{key}: delay {x['delayMs']:.2f} ms, want {want}"
+
+
+def test_fx_tail_rings_after_off(proof_page):
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      async function render(turnOn) {
+        const ctx = new OfflineAudioContext(2, 2 * SR, SR);
+        const m = new M.Mixer(ctx);
+        m.output.connect(ctx.destination);
+        const buf = ctx.createBuffer(1, 2 * SR, SR);
+        const d = buf.getChannelData(0);
+        for (const t0 of [0.1, 1.1]) {                               // two 50 ms bursts
+          for (let i = 0; i < 0.05 * SR; i++) d[Math.round(t0 * SR) + i] = 0.5 * Math.sin(2 * Math.PI * 1000 * i / SR);
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf; src.connect(m.channel(1).input); src.start();
+        const fx = new F.BeatFx(ctx, m, () => 128, { decks: [] });
+        fx.select(1);                                                // Echo
+        fx.beat(-1); fx.beat(-1);                                    // 1/2 beat = 234 ms
+        fx.setLevel(1);
+        if (turnOn) {
+          fx.setOn(true);
+          ctx.suspend(0.2).then(() => { fx.setOn(false); ctx.resume(); });
+        }
+        const out = await ctx.startRendering();
+        const R = out.getChannelData(1);
+        return {
+          name: fx.state.name, on: fx.state.on,
+          repeat2: rmsDb(R, 0.575, 0.61),      // 0.1 + 2 x 0.234: after off
+          repeat4: rmsDb(R, 1.045, 1.08),      // 0.1 + 4 x 0.234: still ringing
+          noNewEcho: rmsDb(R, 1.340, 1.38),    // where the second burst's echo would be
+        };
+      }
+      return { on: await render(true), never: await render(false) };
+    }""")
+    print(f"\necho tail: {r}")
+    on, never = r["on"], r["never"]
+    assert on["name"] == "Echo" and on["on"] is False, r
+    assert on["repeat2"] > -30, f"no tail after off: {r}"
+    assert on["repeat4"] > -50, f"tail died too early: {r}"
+    assert never["repeat2"] < -90, f"the control render has an echo: {r}"
+    assert on["noNewEcho"] < -60, f"the input was not closed at off: {r}"
+
+
+def test_sampler_plays_through_the_master_only(proof_page):
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      const ctx = new OfflineAudioContext(2, SR, SR);
+      const m = new M.Mixer(ctx);
+      m.output.connect(ctx.destination);
+      m.channel(1).setFader(0); m.channel(2).setFader(0);
+      m.setPhonesMix(0);                                  // phones: cue only
+      const s = new S.Sampler(ctx, m.samplerInput);
+      const hits = [];
+      for (let i = 0; i < 8; i++) {
+        ctx.suspend(0.1 * (i + 1)).then(() => { s.trigger(i); ctx.resume(); });
+      }
+      const out = await ctx.startRendering();
+      const L = out.getChannelData(0), R = out.getChannelData(1);
+      for (let i = 0; i < 8; i++) hits.push(rmsDb(R, 0.1 * (i + 1), 0.1 * (i + 1) + 0.04));
+      return { hits, left: rmsDb(L, 0, 1) };
+    }""")
+    print(f"\nsampler: {r}")
+    for i, h in enumerate(r["hits"]):
+        assert h > -45, f"pad {i + 1} silent: {r}"
+    assert r["left"] < -90, f"sampler reached the cue ear with MIX on cue: {r}"
+
+
+def test_beat_fx_roll_slips_back_on_the_grid(proof_page, carried):
+    """Roll 1 beat on a real deck through the mixer, held 2.5 beats: while
+    rolling the soft beat repeats, and after off the track is where it would
+    have been (the loud downbeat lands on its original time, within 1 ms)."""
+    r = proof_page.evaluate("async (file) => {" + IMPORTS + """
+      const { Deck } = await import('/static/cabine/engine/deck.js');
+      const { DeckVoice } = await import('/static/cabine/engine/deck-voice.js');
+      const { loadTrack, networkSource } = await import('/static/cabine/engine/loader.js');
+      const sr = 44100;
+      const ctx = new OfflineAudioContext(2, Math.round(3.6 * sr), sr);
+      const m = new M.Mixer(ctx);
+      m.output.connect(ctx.destination);
+      const voice = await DeckVoice.create(ctx);
+      voice.connect(m.channel(1).input);
+      const deck = new Deck(voice, { now: () => ctx.currentTime });
+      deck.load(await loadTrack(ctx, networkSource(), file));      // 120 BPM, beats at 0.25 + k/2
+      const fx = new F.BeatFx(ctx, m, () => deck.effectiveBpm(), { decks: [deck, null] });
+      for (let i = 0; i < 4; i++) fx.select(1);                        // Roll, 1 beat, CH 1
+      deck._seekNow(1.0, 0);
+      deck.playPause();
+      await voice.sync();
+      const marks = {};
+      ctx.suspend(0.3).then(async () => {                              // at 1.3 s: roll from 1.25
+        fx.setOn(true); marks.roll = deck.state.roll; await voice.sync(); ctx.resume();
+      });
+      ctx.suspend(1.55).then(async () => {                             // 2.5 beats later
+        fx.setOn(false); marks.after = deck.state.roll; await voice.sync(); ctx.resume();
+      });
+      const out = await ctx.startRendering();
+      const R = out.getChannelData(1);
+      const peak = (t) => { let p = 0; for (let i = Math.round((t - 0.01) * sr); i < Math.round((t + 0.03) * sr); i++) p = Math.max(p, Math.abs(R[i])); return p; };
+      const onset = (t) => { for (let i = Math.round((t - 0.05) * sr); i < R.length; i++) if (Math.abs(R[i]) > 0.2) return i / sr; return -1; };
+      return { roll: marks.roll, after: marks.after, name: fx.state.name,
+               p125: peak(1.25), p225: peak(2.25), p325: peak(3.25), on325: onset(3.25) };
+    }""", carried["click120"])
+    print(f"\nroll: {r}")
+    assert r["name"] == "Roll" and r["roll"] == {"beats": 1, "in": 1.25, "out": 1.75}, r
+    assert r["after"] is None, r
+    # unrolled, 1.25 s would be track 2.25 (a downbeat, loud); rolled it is the soft beat at 1.25
+    assert r["p125"] < 0.8 * r["p325"], f"no roll: {r}"
+    # with slip, 2.25 s is track 3.25 (soft) and 3.25 s is track 4.25 (loud)
+    assert r["p225"] < 0.8 * r["p325"], f"no slip: {r}"
+    assert abs(r["on325"] - 3.25) < 0.001, f"downbeat off by {1000 * (r['on325'] - 3.25):.2f} ms"
