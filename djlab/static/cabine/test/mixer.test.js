@@ -5,6 +5,7 @@ import {
   trimGain, eqGainDb, dbToGain, cfxFilter, crossfaderGains, faderGain, phonesMixGains,
   levelGain, TRIM_MAX_DB, EQ_MAX_DB, CFX_DEAD_ZONE, CF_CUT_LAG, EQ_BANDS,
   OUTPUT_LEVEL_DB, CLIP_KNEE, softClip, softClipCurve, CLIP_RANGE,
+  EQ_MODE, EQ_MIN_DB, EQ_MIN_DB_BY_MODE,
   Mixer, MIXER_ACTIONS, CHANNEL_ACTIONS,
 } from "../engine/mixer.js";
 import { BeatFx, FX_NAMES, FX_FRACTIONS, FX_TARGETS, BEATFX_ACTIONS, fxBeatSeconds } from "../engine/fx.js";
@@ -17,17 +18,41 @@ const db = (g) => 20 * Math.log10(g);
 
 // ---- pure mixer math ----------------------------------------------------------
 
-test("eq_kill_at_zero", () => {
-  assert.equal(eqGainDb(0), -Infinity);
-  assert.equal(dbToGain(eqGainDb(0)), 0, "a killed band passes nothing");
-  assert.equal(eqGainDb(-0.1), -Infinity, "below the knob's travel is still a kill");
-  assert.ok(eqGainDb(0.01) < -60, `just above the stop is nearly silent: ${eqGainDb(0.01)}`);
+test("eq_minimum_is_minus_26_db_in_eq_mode", () => {
+  // rekordbox Preferences > Mixer: EQ (the default, DJM-900NXS2: -26 .. +6 dB) or ISOLATOR
+  assert.equal(EQ_MODE, "EQ");
+  assert.equal(EQ_MIN_DB, -26);
+  assert.deepEqual(EQ_MIN_DB_BY_MODE, { EQ: -26, ISOLATOR: -Infinity });
+  assert.equal(eqGainDb(0), -26, "fully counterclockwise: -26 dB, not a kill");
+  assert.equal(eqGainDb(0, "EQ"), -26);
+  assert.equal(eqGainDb(-0.1), -26, "below the knob's travel stays at the minimum");
+  assert.ok(near(dbToGain(eqGainDb(0)), 10 ** (-26 / 20)));
+  assert.ok(near(eqGainDb(0.25), -13), `linear in dB below center: ${eqGainDb(0.25)}`);
+  assert.equal(eqGainDb(1), EQ_MAX_DB, "max stays +6");
   let prev = -Infinity;
-  for (let k = 0.01; k <= 1.0001; k += 0.01) {
+  for (let k = 0; k <= 1.0001; k += 0.01) {
     const g = eqGainDb(Math.min(k, 1));
     assert.ok(g > prev, `monotonic at ${k}`);
     prev = g;
   }
+});
+
+test("isolator_mode_kills_at_zero", () => {
+  assert.equal(eqGainDb(0, "ISOLATOR"), -Infinity);
+  assert.equal(dbToGain(eqGainDb(0, "ISOLATOR")), 0, "a killed band passes nothing");
+  assert.equal(eqGainDb(-0.1, "ISOLATOR"), -Infinity, "below the knob's travel is still a kill");
+  assert.ok(eqGainDb(0.01, "ISOLATOR") < -60, `just above the stop is nearly silent`);
+  assert.equal(eqGainDb(0.5, "ISOLATOR"), 0);
+  assert.equal(eqGainDb(1, "ISOLATOR"), EQ_MAX_DB);
+  let prev = -Infinity;
+  for (let k = 0.01; k <= 1.0001; k += 0.01) {
+    const g = eqGainDb(Math.min(k, 1), "ISOLATOR");
+    assert.ok(g > prev, `monotonic at ${k}`);
+    prev = g;
+  }
+  const iso = new Mixer(new FakeContext(), { eqMode: "ISOLATOR" }).channel(1);
+  iso.setEq("low", 0);
+  assert.equal(iso._nodes.bands.low.gain.value, 0, "the mixer in ISOLATOR mode kills");
 });
 
 test("eq_unity_at_center", () => {
@@ -137,6 +162,8 @@ test("mixer_has_headroom_on_every_channel_and_clippers_on_both_ears", () => {
     assert.ok(Math.abs(ch.input.gain.value - dbToGain(OUTPUT_LEVEL_DB)) < 1e-12, "deck output level");
     assert.ok(ch.input.connectedTo(ch._nodes.trim));
   }
+  assert.ok(Math.abs(m.samplerInput.gain.value - dbToGain(OUTPUT_LEVEL_DB)) < 1e-12,
+    "the sampler gets the same headroom as the decks");
   const shapers = ctx.of("waveshaper");
   assert.equal(shapers.length, 2, "one clipper per ear");
   for (const w of shapers) assert.ok(w.curve && w.curve.length > 1000);
@@ -170,7 +197,7 @@ test("mixer_controls_drive_their_gains", () => {
   ch.setTrim(1);
   assert.ok(near(ch._nodes.trim.gain.value, trimGain(1)));
   ch.setEq("low", 0);
-  assert.equal(ch._nodes.bands.low.gain.value, 0);
+  assert.ok(near(ch._nodes.bands.low.gain.value, dbToGain(-26)), "EQ mode: -26 dB at minimum");
   ch.setCue(true);
   assert.equal(ch._nodes.cue.gain.value, 1);
   ch.setCue(false);

@@ -25,7 +25,7 @@ def test_carried_buffer_grid_alignment(proof_page, carried):
       const sr = 44100;
       const ctx = new OfflineAudioContext(2, 2 * sr, sr);
       const track = await loadTrack(ctx, networkSource(), file);
-      const voice = await DeckVoice.create(ctx);
+      const voice = await DeckVoice.create(ctx, { testHooks: true });
       voice.connect(ctx.destination);
       const deck = new Deck(voice, { now: () => ctx.currentTime });
       deck.load(track);
@@ -58,7 +58,7 @@ def test_reverse_scrub_plays_backwards(proof_page, carried):
       const ctx = new OfflineAudioContext(2, 3 * F, sr);
       const track = await loadTrack(ctx, networkSource(), file);
       const src = new Int16Array(track.pcm.left);  // keep a copy: load transfers the buffers
-      const voice = await DeckVoice.create(ctx);
+      const voice = await DeckVoice.create(ctx, { testHooks: true });
       voice.connect(ctx.destination);
       const start = 2.0, f0 = start * sr;
       voice.load(track.pcm);
@@ -106,7 +106,7 @@ LOAD_WHILE_PLAYING = "async ({a, b, stallMs}) => {" + IMPORTS + """
   const ctx = new AudioContext({ latencyHint: 'interactive' });
   await ctx.resume();
   const src = networkSource();
-  const vA = await DeckVoice.create(ctx);
+  const vA = await DeckVoice.create(ctx, { testHooks: true });
   vA.connect(ctx.destination);
   const A = new Deck(vA, { now: () => ctx.currentTime });
   A.load(await loadTrack(ctx, src, a));
@@ -116,7 +116,7 @@ LOAD_WHILE_PLAYING = "async ({a, b, stallMs}) => {" + IMPORTS + """
   await sleep(1000);
   const before = vA.underruns;
   if (stallMs) vA.stall(stallMs);
-  const vB = await DeckVoice.create(ctx);
+  const vB = await DeckVoice.create(ctx, { testHooks: true });
   vB.connect(ctx.destination);
   const B = new Deck(vB, { now: () => ctx.currentTime });
   const l0 = performance.now();
@@ -165,7 +165,7 @@ def test_scheduled_start_lands_with_its_seek(proof_page, carried):
       const sr = 44100;
       const ctx = new OfflineAudioContext(2, sr, sr);
       const track = await loadTrack(ctx, networkSource(), file);
-      const voice = await DeckVoice.create(ctx);
+      const voice = await DeckVoice.create(ctx, { testHooks: true });
       voice.connect(ctx.destination);
       voice.load(track.pcm);
       voice.seek(0.25);                   // parked ON a click: any early start would sound
@@ -196,7 +196,7 @@ def test_scheduled_loop_release_lands_with_its_seek(proof_page, carried):
       const sr = 44100;
       const ctx = new OfflineAudioContext(2, sr, sr);
       const track = await loadTrack(ctx, networkSource(), file);
-      const voice = await DeckVoice.create(ctx);
+      const voice = await DeckVoice.create(ctx, { testHooks: true });
       voice.connect(ctx.destination);
       voice.load(track.pcm);
       voice.seek(1.0);

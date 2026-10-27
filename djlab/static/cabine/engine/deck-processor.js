@@ -11,8 +11,10 @@
 //               {type:"seek", s, at?}        at = audio-clock time, null = now
 //               {type:"loop", start, end, at?} seconds, null/null = off; at as seek
 //               {type:"run", on, at?}        at = audio-clock time, null = now
-//               {type:"ping", id}            answered with {type:"pong", id, s, t, seq}
+//               {type:"ping", id}            test hook: answered with {type:"pong", id, s, t, seq}
 //               {type:"stall", ms}           test hook: block the render thread once
+// Test hooks run only for a node created with processorOptions.testHooks;
+// otherwise ping and stall are ignored (the shipped app cannot stall it).
 // Messages out: {type:"pos", s, t, seq, pending} every 32 render quanta
 //               {type:"underrun", n}         render thread fell behind the wall clock
 //               {type:"loaded", frames, seq}, {type:"ended", s}
@@ -33,6 +35,7 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
     const o = (options && options.processorOptions) || {};
     this.detect = !!o.detectUnderrun;
     this.underrunMs = o.underrunMs > 0 ? o.underrunMs : UNDERRUN_MS;
+    this.testHooks = !!o.testHooks;
     this.L = null;
     this.R = null;
     this.n = 0;
@@ -138,11 +141,12 @@ class CabineDeckProcessor extends AudioWorkletProcessor {
         break;
       }
       case "ping":
+        if (!this.testHooks) break;
         this.port.postMessage({ type: "pong", id: d.id, s: this.pos / this.srcRate,
           t: currentTime, seq: this.seq });
         break;
       case "stall":
-        this.stallMs = Number(d.ms) || 0;
+        if (this.testHooks) this.stallMs = Number(d.ms) || 0;
         break;
       default:
         break;

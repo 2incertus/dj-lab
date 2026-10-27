@@ -25,11 +25,14 @@ export class DeckVoice {
 
   /**
    * @param ctx   AudioContext or OfflineAudioContext with the module registered
-   * @param opts  {detectUnderrun}: defaults to on for a realtime context
+   * @param opts  {detectUnderrun}: defaults to on for a realtime context;
+   *              {testHooks}: sync() and stall() work only with this set (the
+   *              proof page and e2e tests pass it; the app never does)
    */
   constructor(ctx, opts = {}) {
     const offline = typeof OfflineAudioContext !== "undefined" && ctx instanceof OfflineAudioContext;
     this.ctx = ctx;
+    this.testHooks = !!opts.testHooks;
     this.node = new AudioWorkletNode(ctx, "cabine-deck", {
       numberOfInputs: 0,
       numberOfOutputs: 1,
@@ -37,6 +40,7 @@ export class DeckVoice {
       processorOptions: {
         detectUnderrun: opts.detectUnderrun !== undefined ? !!opts.detectUnderrun : !offline,
         underrunMs: opts.underrunMs,
+        testHooks: this.testHooks,
       },
     });
     this.duration = 0;
@@ -104,9 +108,10 @@ export class DeckVoice {
 
   onunderrun(cb) { this._underrunCbs.push(cb); }
 
-  /** Resolves once the worklet has handled every earlier message, with its
-   *  playhead {s, t} at that moment. */
+  /** Test hook: resolves once the worklet has handled every earlier message,
+   *  with its playhead {s, t} at that moment. Rejects without testHooks. */
   sync() {
+    if (!this.testHooks) return Promise.reject(new Error("DeckVoice.sync: test hooks are off"));
     const id = ++this._pingId;
     return new Promise((resolve) => {
       this._pings.set(id, resolve);
@@ -114,8 +119,8 @@ export class DeckVoice {
     });
   }
 
-  /** Test hook: block the render thread once for ms. */
-  stall(ms) { this._post({ type: "stall", ms }); }
+  /** Test hook: block the render thread once for ms (no-op without testHooks). */
+  stall(ms) { if (this.testHooks) this._post({ type: "stall", ms }); }
 
   _onMessage(d) {
     switch (d.type) {

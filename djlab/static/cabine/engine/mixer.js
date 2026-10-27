@@ -21,13 +21,18 @@
 // |                   | 12 o'clock = 0 dB, fully CW = +9 dB (TRIM_MAX_DB, the DJM  |        |
 // |                   | range rekordbox's mixer models). Below center the gain is  |        |
 // |                   | (2k)^3 (-18 dB at a quarter turn).                         |        |
-// | EQ HI / MID / LOW | "Boost or reduce the relevant frequency" [M]. rekordbox    | M,R,S,B|
-// |                   | offers EQ or ISOLATOR mode [R]; the spec asks for a full   |        |
-// |                   | kill at minimum, which is ISOLATOR: -inf .. 0 dB (center)  |        |
-// |                   | .. +6 dB (EQ_MAX_DB, the DJM boost both modes share).      |        |
-// |                   | Below center gain = (2k)^2 (-12 dB at a quarter turn).      |        |
-// |                   | Three-band Linkwitz-Riley (24 dB/oct) isolator crossing at |        |
-// |                   | 250 Hz and 2.5 kHz [B]; flat (allpass) with all at center. |        |
+// | EQ HI / MID / LOW | "Boost or reduce the relevant frequency" [M]. rekordbox    | M,R,B  |
+// |                   | offers EQ or ISOLATOR mode [R]. EQ_MODE picks one (a       | (F1)   |
+// |                   | single constant, read it off his rekordbox: Preferences >  |        |
+// |                   | Controller > Mixer). Default "EQ", rekordbox's default     |        |
+// |                   | (review, fairly sure; TO CONFIRM from a screenshot):       |        |
+// |                   | EQ_MIN_DB -26 dB fully CCW (DJM-900NXS2), linear in dB to  |        |
+// |                   | 0 dB at center [B]. "ISOLATOR": full kill (-inf) fully CCW,|        |
+// |                   | (2k)^2 below center (-12 dB at a quarter turn) [B]. Both:  |        |
+// |                   | +6 dB fully CW (EQ_MAX_DB, linear in dB above center).     |        |
+// |                   | Both modes use the same three-band Linkwitz-Riley (24      |        |
+// |                   | dB/oct) split at 250 Hz and 2.5 kHz [B]; flat (allpass)    |        |
+// |                   | with all at center. The spec's "kill" is ISOLATOR mode.    |        |
 // | CFX               | Sound Color FX "FILTER" (Smart CFX off, rekordbox default  | M, S, B|
 // |                   | type per the spec). Center: unchanged [M]. CCW: low-pass   |        |
 // |                   | cutoff falls (20 kHz -> 80 Hz), CW: high-pass cutoff rises |        |
@@ -61,7 +66,9 @@
 // | (headroom)        | mixer: -21 .. -3 dB / NONE) "Adjust the output level of    |        |
 // |                   | decks ... If the level is too high, clipping is likely ... |        |
 // |                   | Clipping will enable the limiter" [R p.242]. No default is |        |
-// |                   | stated: OUTPUT_LEVEL_DB = -6 dB on each deck before TRIM.  |        |
+// |                   | stated: OUTPUT_LEVEL_DB = -6 dB on each deck before TRIM,  |        |
+// |                   | and on the sampler's way in (F1), so a hit at full sampler |        |
+// |                   | GAIN sits at deck level instead of 6 dB hotter [B].        |        |
 // | Peak limiter      | FLX4 [Master output] > [Peak Limiter] [M p.80] and the      | M, R, B|
 // |                   | limiter above: a zero-latency soft clipper (WaveShaper,    |        |
 // |                   | transparent to CLIP_KNEE 0.7 = -3.1 dBFS, tanh above, held |        |
@@ -82,7 +89,7 @@
 //   input(OUTPUT_LEVEL) -> TRIM -> isolator(LOW | MID | HIGH) -> CFX biquad -> post (meter, CUE send)
 //   post -> fader -> crossfader -> FX insert (channel) -> bus
 // Master: bus -> FX insert ("master" = the FLX4 lever's 1&2, see fx.js) -> masterSum
-//   (+ sampler) -> MASTER LEVEL -> clipper -> masterTap -> mono -> merger input 1 (right)
+//   (+ sampler(OUTPUT_LEVEL)) -> MASTER LEVEL -> clipper -> masterTap -> mono -> merger input 1 (right)
 // Phones: (CUE'd channels + MASTER CUE) * mixCue + masterSum * mixMaster
 //   -> HEADPHONES LEVEL -> clipper -> mono -> merger input 0 (left)
 //
@@ -95,6 +102,10 @@ export const CLIP_RANGE = 16;                  // the clipper's curve covers +-1
 export const CLIP_CURVE_POINTS = 16385;
 export const TRIM_MAX_DB = 9;
 export const EQ_MAX_DB = 6;
+/** rekordbox Preferences > Controller > Mixer: "EQ" (default) or "ISOLATOR". */
+export const EQ_MODE = "EQ";
+export const EQ_MIN_DB_BY_MODE = Object.freeze({ EQ: -26, ISOLATOR: -Infinity });
+export const EQ_MIN_DB = EQ_MIN_DB_BY_MODE[EQ_MODE];
 export const EQ_BANDS = ["hi", "mid", "low"];
 export const EQ_CROSSOVER_LOW_HZ = 250;
 export const EQ_CROSSOVER_HIGH_HZ = 2500;
@@ -136,11 +147,18 @@ export function trimGain(k01) {
   return dbToGain((k - 0.5) * 2 * TRIM_MAX_DB);
 }
 
-/** EQ knob 0..1 -> dB: -Infinity (kill) at 0, 0 at 0.5, +EQ_MAX_DB at 1. */
-export function eqGainDb(k01) {
+/** EQ knob 0..1 -> dB: 0 at 0.5, +EQ_MAX_DB at 1; at 0 the mode's minimum:
+ *  EQ -26 dB (linear in dB below center), ISOLATOR -Infinity (a kill). */
+export function eqGainDb(k01, mode = EQ_MODE) {
   const k = Number(k01);
-  if (!(k > 0)) return -Infinity;
-  if (k < 0.5) return 40 * Math.log10(2 * k);
+  if (mode === "ISOLATOR") {
+    if (!(k > 0)) return -Infinity;
+    if (k < 0.5) return 40 * Math.log10(2 * k);
+  } else {
+    const min = EQ_MIN_DB_BY_MODE.EQ;
+    if (!(k > 0)) return min;
+    if (k < 0.5) return min * (1 - 2 * k);
+  }
   return (Math.min(k, 1) - 0.5) * 2 * EQ_MAX_DB;
 }
 
@@ -277,11 +295,8 @@ class Channel {
     const upper = lr4(ctx, "highpass", EQ_CROSSOVER_LOW_HZ, trim);
     const midLp = lr4(ctx, "lowpass", EQ_CROSSOVER_HIGH_HZ, upper);
     const hiHp = lr4(ctx, "highpass", EQ_CROSSOVER_HIGH_HZ, upper);
-    const bands = {
-      low: gainNode(ctx, dbToGain(eqGainDb(DEFAULTS.eq))),
-      mid: gainNode(ctx, dbToGain(eqGainDb(DEFAULTS.eq))),
-      hi: gainNode(ctx, dbToGain(eqGainDb(DEFAULTS.eq))),
-    };
+    const eq0 = dbToGain(eqGainDb(DEFAULTS.eq, mixer.eqMode));
+    const bands = { low: gainNode(ctx, eq0), mid: gainNode(ctx, eq0), hi: gainNode(ctx, eq0) };
     const eqSum = gainNode(ctx);
     lowAp.connect(bands.low).connect(eqSum);
     midLp.connect(bands.mid).connect(eqSum);
@@ -314,7 +329,7 @@ class Channel {
     const node = this._nodes.bands[band];
     if (!node) throw new Error(`EQ band ${band}`);
     this.state[band] = clamp01(k);
-    setSmooth(this.mixer.ctx, node.gain, dbToGain(eqGainDb(this.state[band])));
+    setSmooth(this.mixer.ctx, node.gain, dbToGain(eqGainDb(this.state[band], this.mixer.eqMode)));
   }
 
   setCfx(k) {
@@ -368,8 +383,10 @@ class Channel {
 }
 
 export class Mixer {
-  constructor(ctx) {
+  /** @param opts  {eqMode}: "EQ" or "ISOLATOR", default EQ_MODE */
+  constructor(ctx, opts = {}) {
     this.ctx = ctx;
+    this.eqMode = opts.eqMode === "ISOLATOR" || opts.eqMode === "EQ" ? opts.eqMode : EQ_MODE;
     this._bus = gainNode(ctx);
     this._cueBus = gainNode(ctx);
     this._channels = [];
@@ -387,8 +404,9 @@ export class Mixer {
     this._bus.connect(this._masterInsert.send);
     this._masterSum = gainNode(ctx);
     this._masterInsert.ret.connect(this._masterSum);
-    /** The sampler's way in: joins the master after the Beat FX insert. */
-    this.samplerInput = gainNode(ctx);
+    /** The sampler's way in: joins the master after the Beat FX insert,
+     *  through the same OUTPUT_LEVEL_DB headroom as the decks. */
+    this.samplerInput = gainNode(ctx, dbToGain(OUTPUT_LEVEL_DB));
     this.samplerInput.connect(this._masterSum);
     this._masterGain = gainNode(ctx, levelGain(DEFAULTS.masterLevel));
     /** Post MASTER LEVEL, pre split: what the recorder records. */

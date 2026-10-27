@@ -86,11 +86,13 @@ def test_split_cue_left_is_cue_right_is_master(proof_page):
     assert r["mixM"]["l1k"] > -30 and r["mixM"]["l440"] < -60, r
 
 
-def test_low_kill_removes_sub(proof_page):
+def test_low_at_minimum_eq_minus_26_and_isolator_kill(proof_page):
+    """EQ mode (default): LOW fully CCW takes 60 Hz down 26 dB. ISOLATOR mode:
+    a full kill (more than 40 dB). Neither touches 5 kHz."""
     r = proof_page.evaluate("async () => {" + IMPORTS + """
-      async function render(hz, low) {
+      async function render(hz, low, eqMode) {
         const ctx = new OfflineAudioContext(2, SR, SR);
-        const m = new M.Mixer(ctx);
+        const m = new M.Mixer(ctx, eqMode ? { eqMode } : {});
         m.output.connect(ctx.destination);
         osc(ctx, hz, 0.5).connect(m.channel(1).input);
         m.setCrossfader(0);
@@ -99,16 +101,21 @@ def test_low_kill_removes_sub(proof_page):
         return toneDb(out.getChannelData(1), hz, 0.4, 1);
       }
       return {
-        sub: await render(60, 0.5), subKilled: await render(60, 0),
-        hi: await render(5000, 0.5), hiWithLowKilled: await render(5000, 0),
+        mode: M.EQ_MODE,
+        sub: await render(60, 0.5), subMin: await render(60, 0),
+        hi: await render(5000, 0.5), hiWithLowMin: await render(5000, 0),
+        subKilled: await render(60, 0, 'ISOLATOR'), hiWithLowKilled: await render(5000, 0, 'ISOLATOR'),
         sub3: await render(60, 1),
         flat: [await render(250, null), await render(800, null), await render(2500, null)],
       };
     }""")
-    print(f"\nlow kill: {r}")
+    print(f"\nlow at minimum: {r}")
+    assert r["mode"] == "EQ", r
     # 0.5 sine through OUTPUT_LEVEL_DB (-6) headroom, crossfader full to channel 1
     assert abs(r["sub"] - (20 * __import__("math").log10(0.5) - 6)) < 0.5, f"wrong level at center: {r}"
-    assert r["sub"] - r["subKilled"] > 40, f"60 Hz only dropped {r['sub'] - r['subKilled']:.1f} dB"
+    assert abs(r["sub"] - r["subMin"] - 26) < 1, f"EQ mode: 60 Hz dropped {r['sub'] - r['subMin']:.1f} dB, want 26"
+    assert r["sub"] - r["subKilled"] > 40, f"ISOLATOR: 60 Hz only dropped {r['sub'] - r['subKilled']:.1f} dB"
+    assert abs(r["hi"] - r["hiWithLowMin"]) < 0.5, f"LOW at minimum touched 5 kHz: {r}"
     assert abs(r["hi"] - r["hiWithLowKilled"]) < 0.5, f"low kill touched 5 kHz: {r}"
     assert abs(r["sub3"] - r["sub"] - 6) < 0.5, f"full LOW boost is not +6 dB: {r}"
     for db in r["flat"]:                                       # at and between the crossovers
@@ -216,6 +223,42 @@ def test_sampler_plays_through_the_master_only(proof_page):
     assert r["left"] < -90, f"sampler reached the cue ear with MIX on cue: {r}"
 
 
+def test_sampler_hit_sits_at_deck_level(proof_page):
+    """A sampler hit at full GAIN and the same sound played by a deck at
+    unity (TRIM center, EQ flat, fader up, crossfader to it) peak within 1 dB
+    on the master: both pass the same OUTPUT_LEVEL_DB headroom."""
+    r = proof_page.evaluate("async () => {" + IMPORTS + """
+      // the raw kick, as the sampler voice makes it
+      let ctx = new OfflineAudioContext(1, SR, SR);
+      let s = new S.Sampler(ctx, ctx.destination);
+      s.setGain(1);
+      ctx.suspend(0.1).then(() => { s.trigger(0); ctx.resume(); });
+      const raw = await ctx.startRendering();
+      // sampler hit at 0.1 s, the same kick from a deck at 0.6 s
+      ctx = new OfflineAudioContext(2, SR, SR);
+      const m = new M.Mixer(ctx);
+      m.masterTap.connect(ctx.destination);
+      m.setCrossfader(0);
+      const buf = ctx.createBuffer(1, SR, SR);
+      buf.getChannelData(0).set(raw.getChannelData(0).subarray(Math.round(0.1 * SR), Math.round(0.5 * SR)));
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(m.channel(1).input); src.start(0.6);
+      s = new S.Sampler(ctx, m.samplerInput);
+      s.setGain(1);
+      ctx.suspend(0.1).then(() => { s.trigger(0); ctx.resume(); });
+      const out = await ctx.startRendering();
+      const R = out.getChannelData(0);
+      const pk = (t0, t1) => { let p = 0; for (let i = Math.round(t0 * SR); i < Math.round(t1 * SR); i++) p = Math.max(p, Math.abs(R[i])); return p; };
+      const rawPk = (() => { const a = raw.getChannelData(0); let p = 0; for (const v of a) p = Math.max(p, Math.abs(v)); return p; })();
+      return { sampler: pk(0.1, 0.5), deck: pk(0.6, 1.0), raw: rawPk };
+    }""")
+    import math
+    diff = 20 * math.log10(r["sampler"] / r["deck"])
+    print(f"\nsampler vs deck: {r}, {diff:+.2f} dB")
+    assert r["deck"] > 0.1, r
+    assert abs(diff) < 1, f"sampler hit {diff:+.2f} dB against the deck"
+
+
 def test_beat_fx_roll_slips_back_on_the_grid(proof_page, carried):
     """Roll 1 beat on a real deck through the mixer, held 2.5 beats: while
     rolling the soft beat repeats, and after off the track is where it would
@@ -228,7 +271,7 @@ def test_beat_fx_roll_slips_back_on_the_grid(proof_page, carried):
       const ctx = new OfflineAudioContext(2, Math.round(3.6 * sr), sr);
       const m = new M.Mixer(ctx);
       m.output.connect(ctx.destination);
-      const voice = await DeckVoice.create(ctx);
+      const voice = await DeckVoice.create(ctx, { testHooks: true });
       voice.connect(m.channel(1).input);
       const deck = new Deck(voice, { now: () => ctx.currentTime });
       deck.load(await loadTrack(ctx, networkSource(), file));      // 120 BPM, beats at 0.25 + k/2
