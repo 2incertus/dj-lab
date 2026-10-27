@@ -226,31 +226,34 @@ def test_sampler_plays_through_the_master_only(proof_page):
 def test_sampler_hit_sits_at_deck_level(proof_page):
     """A sampler hit at full GAIN and the same sound played by a deck at
     unity (TRIM center, EQ flat, fader up, crossfader to it) peak within 1 dB
-    on the master: both pass the same OUTPUT_LEVEL_DB headroom."""
+    on the master: both pass the same OUTPUT_LEVEL_DB headroom. The pad is
+    the sub drop (pad 7): no noise in it, so the two renders are the same
+    sound (each Sampler makes its own random noise buffer)."""
     r = proof_page.evaluate("async () => {" + IMPORTS + """
-      // the raw kick, as the sampler voice makes it
-      let ctx = new OfflineAudioContext(1, SR, SR);
+      const PAD = 6;
+      // the raw sub drop, as the sampler voice makes it
+      let ctx = new OfflineAudioContext(1, 2 * SR, SR);
       let s = new S.Sampler(ctx, ctx.destination);
       s.setGain(1);
-      ctx.suspend(0.1).then(() => { s.trigger(0); ctx.resume(); });
+      ctx.suspend(0.1).then(() => { s.trigger(PAD); ctx.resume(); });
       const raw = await ctx.startRendering();
-      // sampler hit at 0.1 s, the same kick from a deck at 0.6 s
-      ctx = new OfflineAudioContext(2, SR, SR);
+      // sampler hit at 0.1 s, the same sound from a deck at 2.0 s
+      ctx = new OfflineAudioContext(2, 4 * SR, SR);
       const m = new M.Mixer(ctx);
       m.masterTap.connect(ctx.destination);
       m.setCrossfader(0);
-      const buf = ctx.createBuffer(1, SR, SR);
-      buf.getChannelData(0).set(raw.getChannelData(0).subarray(Math.round(0.1 * SR), Math.round(0.5 * SR)));
+      const buf = ctx.createBuffer(1, 2 * SR, SR);
+      buf.getChannelData(0).set(raw.getChannelData(0).subarray(Math.round(0.1 * SR), Math.round(1.7 * SR)));
       const src = ctx.createBufferSource();
-      src.buffer = buf; src.connect(m.channel(1).input); src.start(0.6);
+      src.buffer = buf; src.connect(m.channel(1).input); src.start(2.0);
       s = new S.Sampler(ctx, m.samplerInput);
       s.setGain(1);
-      ctx.suspend(0.1).then(() => { s.trigger(0); ctx.resume(); });
+      ctx.suspend(0.1).then(() => { s.trigger(PAD); ctx.resume(); });
       const out = await ctx.startRendering();
       const R = out.getChannelData(0);
       const pk = (t0, t1) => { let p = 0; for (let i = Math.round(t0 * SR); i < Math.round(t1 * SR); i++) p = Math.max(p, Math.abs(R[i])); return p; };
       const rawPk = (() => { const a = raw.getChannelData(0); let p = 0; for (const v of a) p = Math.max(p, Math.abs(v)); return p; })();
-      return { sampler: pk(0.1, 0.5), deck: pk(0.6, 1.0), raw: rawPk };
+      return { sampler: pk(0.1, 1.7), deck: pk(2.0, 3.6), raw: rawPk };
     }""")
     import math
     diff = 20 * math.log10(r["sampler"] / r["deck"])

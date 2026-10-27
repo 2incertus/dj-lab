@@ -14,16 +14,16 @@
       -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%; }
     h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
     .cab-proof-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-    .cab-proof-decks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .cab-proof-decks { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
     @media (max-width: 640px) { .cab-proof-decks { grid-template-columns: 1fr; } }
     .cab-proof-deck { background: #221b26; border: 1px solid #3a3040; border-radius: 10px; padding: 10px;
-      display: grid; gap: 8px; }
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
     .cab-proof-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     button, select { font: inherit; color: inherit; background: #3a3040; border: 1px solid #54465c;
       border-radius: 7px; padding: 8px 12px; min-height: 40px; touch-action: manipulation; }
     button.on { background: #7a3f8f; border-color: #a35bbd; }
     button:disabled { opacity: .45; }
-    select { max-width: 100%; flex: 1 1 200px; }
+    select { max-width: 100%; min-width: 0; flex: 1 1 200px; }
     input[type=range] { width: 100%; }
     .cab-proof-jog { height: 64px; border-radius: 32px; background: repeating-linear-gradient(90deg,
       #2d2433 0 10px, #3a3040 10px 20px); touch-action: none; display: grid; place-items: center;
@@ -31,6 +31,8 @@
     .cab-proof-jog.held { outline: 2px solid #a35bbd; }
     .cab-proof-stat { font: 12px/1.4 ui-monospace, Menlo, monospace; color: #cbbad4; white-space: pre-wrap; }
     .cab-proof-warn { color: #ffb3b3; }
+    .cab-proof-meas { margin-top: 10px; }
+    .cab-proof-meas a { color: #e3b8f2; display: block; margin: 4px 0; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -40,6 +42,16 @@
     <span class="cab-proof-stat" id="cab-global">audio off</span>
   </div>
   <div class="cab-proof-decks" id="cab-decks"></div>
+
+  <section class="cab-proof-deck cab-proof-meas" id="cab-meas">
+    <div class="cab-proof-row"><strong>Measurements</strong>
+      <select id="cab-meas-pick"></select>
+      <button id="cab-meas-run" disabled>Measure</button>
+      <button id="cab-meas-rec" disabled>Record 12 s test</button></div>
+    <div class="cab-proof-stat" id="cab-meas-out">Tap Start audio, pick a click fixture, then Measure. Play a deck during Measure for a realistic round trip.</div>
+    <div class="cab-proof-stat" id="cab-meas-rec-out"></div>
+    <div id="cab-meas-files"></div>
+  </section>
 
   <template id="cab-deck-tpl">
     <section class="cab-proof-deck">
@@ -65,6 +77,7 @@
     import { Deck } from "/static/cabine/engine/deck.js";
     import { DeckVoice } from "/static/cabine/engine/deck-voice.js";
     import { loadTrack, networkSource } from "/static/cabine/engine/loader.js";
+    import { timeOfBeat } from "/static/cabine/engine/grid.js";
 
     const source = networkSource();
     const proof = { ctx: null, decks: [], voices: [], tracks: [], source };
@@ -110,15 +123,19 @@
       const ctx = new AudioContext({ latencyHint: "interactive" });
       proof.ctx = ctx;
       await ctx.resume();
+      proof.master = ctx.createGain();               // both decks: what the test recording takes
+      proof.master.connect(ctx.destination);
       for (let i = 0; i < 2; i++) {
-        const voice = await DeckVoice.create(ctx);
-        voice.connect(ctx.destination);
+        const voice = await DeckVoice.create(ctx, { testHooks: true });   // dev page: sync() pings
+        voice.connect(proof.master);
         const deck = new Deck(voice, { now: () => ctx.currentTime });
         proof.voices.push(voice);
         proof.decks.push(deck);
         wire(uis[i], deck, voice, i);
       }
       document.getElementById("cab-start").textContent = "Audio on";
+      document.getElementById("cab-meas-run").disabled = !library.length;
+      document.getElementById("cab-meas-rec").disabled = false;
       requestAnimationFrame(tick);
     }
 
@@ -220,6 +237,186 @@
 
     document.getElementById("cab-start").onclick = () => start();
     proof.start = start;
+
+    // ---- measurements for the iPhone checkpoint (Task 6) ---------------------
+    // Everything here reads the engine from outside; the engine is unchanged.
+
+    const RECORDER_TYPES = ["audio/webm;codecs=opus", "audio/mp4", "audio/mp4;codecs=mp4a.40.2"];
+    const SOURCE_RATE = 44100;                       // carried MP3s are 44.1 kHz
+    const ms = (s) => (Number.isFinite(s) ? (s * 1000).toFixed(2) : "n/a");
+    const measPick = document.getElementById("cab-meas-pick");
+    for (const t of library) {
+      const o = document.createElement("option");
+      o.value = t.file;
+      o.textContent = t.title;
+      measPick.appendChild(o);
+    }
+    const click = library.findIndex((t) => /click/i.test(t.file));
+    if (click >= 0) measPick.selectedIndex = click;
+    const measOut = document.getElementById("cab-meas-out");
+
+    function recorderTypes() {
+      const out = {};
+      for (const t of RECORDER_TYPES) {
+        out[t] = typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported
+          ? MediaRecorder.isTypeSupported(t) : false;
+      }
+      return out;
+    }
+
+    function memoryNote() {
+      const m = performance.memory;
+      if (!m) return "performance.memory not available here (Safari): watch for a tab reload instead";
+      return `heap ${(m.usedJSHeapSize / 1048576).toFixed(0)} MB used of ${(m.jsHeapSizeLimit / 1048576).toFixed(0)} MB limit`;
+    }
+
+    /** The first click through the deck voice, rendered offline at the
+     *  context's own rate: seconds after the grid's first beat. */
+    async function onsetMinusGrid(track, sr) {
+      const g = track.grid;
+      if (!g) return null;
+      const first = timeOfBeat(g, 0);
+      const p0 = Math.max(0, first - 0.2);
+      const off = new OfflineAudioContext(2, Math.round(1.0 * sr), sr);
+      const voice = await DeckVoice.create(off, { testHooks: true });
+      voice.connect(off.destination);
+      const deck = new Deck(voice, { now: () => off.currentTime });
+      deck.load(track);
+      deck._seekNow(p0, 0);                          // dev page only
+      deck.playPause();
+      await voice.sync();
+      const out = await off.startRendering();
+      const L = out.getChannelData(0);
+      for (let i = 0; i < L.length; i++) if (Math.abs(L[i]) > 0.1) return p0 + i / sr - first;
+      return null;
+    }
+
+    async function pingStats(voice, n = 200) {
+      const d = [];
+      for (let i = 0; i < n; i++) {
+        const t0 = performance.now();
+        await voice.sync();
+        d.push(performance.now() - t0);
+      }
+      d.sort((a, b) => a - b);
+      return { n, medianMs: d[Math.floor(n / 2)], maxMs: d[n - 1] };
+    }
+
+    async function measure(file = measPick.value) {
+      if (!proof.ctx) await start();
+      const ctx = proof.ctx;
+      const r = { file, sampleRate: ctx.sampleRate,
+        baseLatencyMs: Number.isFinite(ctx.baseLatency) ? ctx.baseLatency * 1000 : null,
+        outputLatencyMs: Number.isFinite(ctx.outputLatency) ? ctx.outputLatency * 1000 : null };
+      measOut.textContent = "measuring...";
+      const meta = await source.getMeta(file);
+      const track = await loadTrack(ctx, source, file);    // the deck's own decode path
+      r.samples = Number.isFinite(meta.samples) ? meta.samples : null;
+      r.decodedFrames = track.pcm.left.length;
+      r.expectedFrames = r.samples === null ? null : r.samples * ctx.sampleRate / SOURCE_RATE;
+      r.extraFrames = r.expectedFrames === null ? null : r.decodedFrames - r.expectedFrames;
+      r.headOffsetSamples44k = r.extraFrames === null ? null : r.extraFrames * SOURCE_RATE / ctx.sampleRate;
+      const on = await onsetMinusGrid(track, ctx.sampleRate);
+      r.onsetMinusGridMs = on === null ? null : on * 1000;
+      r.playingDuringPings = proof.decks.some((d) => d.state.playing);
+      r.pings = await pingStats(proof.voices[0]);
+      r.recorderTypes = recorderTypes();
+      r.memory = memoryNote();
+      proof.measurements = r;
+      const f = (x, d = 1) => (x === null || x === undefined ? "n/a" : Number(x).toFixed(d));
+      measOut.textContent = [
+        `file ${file}`,
+        `sampleRate ${r.sampleRate} Hz, baseLatency ${f(r.baseLatencyMs, 2)} ms, outputLatency ${f(r.outputLatencyMs, 2)} ms`,
+        `decoded ${r.decodedFrames} frames, expected ${f(r.expectedFrames, 1)} (samples ${r.samples ?? "n/a"} x ${r.sampleRate} / ${SOURCE_RATE})`,
+        `  decoded - expected = ${f(r.extraFrames, 1)} frames = ${f(r.headOffsetSamples44k, 1)} samples at 44.1 kHz`,
+        `  (0 = encoder delay trimmed; untrimmed LAME is about +1105 at the head plus padding)`,
+        `first onset - grid first beat = ${f(r.onsetMinusGridMs, 3)} ms (2 s render through the deck voice)`,
+        `round trip main thread -> worklet, ${r.pings.n} pings: median ${f(r.pings.medianMs, 2)} ms, max ${f(r.pings.maxMs, 2)} ms` +
+          (r.playingDuringPings ? " (a deck was playing)" : " (no deck playing)"),
+        `MediaRecorder: ${RECORDER_TYPES.map((t) => `${t} ${r.recorderTypes[t] ? "yes" : "no"}`).join(", ")}`,
+        `memory: ${r.memory}`,
+      ].join("\n");
+      return r;
+    }
+
+    /** A test recording of the master in chunks, with a beep every second
+     *  (so a file shows how much of it survived). Offers the chunks so far
+     *  WITHOUT stop() (a simulated crash) and the normally stopped file. */
+    async function record(seconds = 12, chunkMs = 3000) {
+      if (!proof.ctx) await start();
+      const ctx = proof.ctx;
+      const recOut = document.getElementById("cab-meas-rec-out");
+      const files = document.getElementById("cab-meas-files");
+      if (typeof MediaRecorder === "undefined") {
+        recOut.textContent = "MediaRecorder: not available in this browser";
+        return { mimeType: null };
+      }
+      const dest = ctx.createMediaStreamDestination();
+      proof.master.connect(dest);
+      const beep = ctx.createOscillator();
+      const bg = ctx.createGain();
+      beep.frequency.value = 1000;
+      bg.gain.value = 0;
+      const t0 = ctx.currentTime + 0.05;
+      for (let k = 0; k <= seconds; k++) {
+        bg.gain.setValueAtTime(0.1, t0 + k);
+        bg.gain.setValueAtTime(0, t0 + k + 0.05);
+      }
+      beep.connect(bg).connect(proof.master);
+      beep.start(t0);
+      const types = recorderTypes();
+      const pick = RECORDER_TYPES.find((t) => types[t]);
+      const rec = new MediaRecorder(dest.stream, pick ? { mimeType: pick } : {});
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      const stopped = new Promise((res) => { rec.onstop = res; });
+      recOut.textContent = `recording ${seconds} s in ${chunkMs / 1000} s chunks (${rec.mimeType || pick || "default type"})...`;
+      rec.start(chunkMs);
+      await new Promise((res) => setTimeout(res, seconds * 1000 + 300));
+      const mimeType = rec.mimeType || pick || "";
+      const crashChunks = chunks.slice();             // what a killed tab would have
+      const crash = new Blob(crashChunks, { type: mimeType });
+      rec.stop();
+      await stopped;
+      beep.stop();
+      beep.disconnect();
+      proof.master.disconnect(dest);
+      const full = new Blob(chunks, { type: mimeType });
+      const ext = /mp4/.test(mimeType) ? "mp4" : /webm/.test(mimeType) ? "webm" : "bin";
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      files.innerHTML = "";
+      const link = (blob, name, label) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.textContent = label;
+        files.appendChild(a);
+      };
+      link(crash, `cabine-proof-crash-${stamp}.${ext}`,
+        `A. simulated crash: ${crashChunks.length} chunks, no stop() (${crash.size} bytes): send this back`);
+      link(full, `cabine-proof-stopped-${stamp}.${ext}`,
+        `B. normal: stopped, ${chunks.length} chunks (${full.size} bytes): send this back`);
+      recOut.textContent = `recorded ${mimeType || "default type"}; beeps every second from the start. ` +
+        "Download both files below and send them back.";
+      const r = { mimeType, crash: { chunks: crashChunks.length, bytes: crash.size },
+        stopped: { chunks: chunks.length, bytes: full.size } };
+      proof.recording = r;
+      return r;
+    }
+
+    proof.measure = { run: measure, record };
+    document.getElementById("cab-meas-run").onclick = async (e) => {
+      e.target.disabled = true;
+      try { await measure(); } catch (err) { measOut.textContent = `measure failed: ${err.message}`; }
+      e.target.disabled = false;
+    };
+    document.getElementById("cab-meas-rec").onclick = async (e) => {
+      e.target.disabled = true;
+      try { await record(); } catch (err) {
+        document.getElementById("cab-meas-rec-out").textContent = `recording failed: ${err.message}`;
+      }
+      e.target.disabled = false;
+    };
   </script>
 </body>
 </html>
