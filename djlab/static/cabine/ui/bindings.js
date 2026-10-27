@@ -17,9 +17,10 @@
 // window.cabine.boardLog) like the Task 9 demo bindings.
 //
 // rekordbox behaviors decided here:
-// - LOAD_LOCK: rekordbox's default is Load Lock on (rekordbox manual,
-//   Preferences > Controller > Deck: "lock" stops a track loading onto a
-//   playing deck). A refused LOAD flashes the deck's line on the strip.
+// - LOAD_LOCK: on, read as rekordbox's default (Preferences > Controller >
+//   Deck: "lock" stops a track loading onto a playing deck). UNCONFIRMED,
+//   from his rekordbox screenshot. A refused LOAD flashes the deck's line
+//   on the strip.
 // - LOAD loads the highlighted track (the list need not be open, as with
 //   rekordbox's browser on the laptop); loading closes the list. The deck is
 //   emptied first (Deck.unload: the worklet drops the old PCM), then the new
@@ -49,7 +50,7 @@
 import { HOT_CUE_COLOURS } from "../flx4-map.js";
 import { masterDeck } from "../engine/rig.js";
 
-export const LOAD_LOCK = true;
+export const LOAD_LOCK = true;                 // UNCONFIRMED, from his rekordbox screenshot
 export const LOAD_LOCK_TEXT = "load lock: the deck is playing";
 const AT_CUE_S = 0.002;
 

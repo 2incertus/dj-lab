@@ -24,8 +24,8 @@
 // | EQ HI / MID / LOW | "Boost or reduce the relevant frequency" [M]. rekordbox    | M,R,B  |
 // |                   | offers EQ or ISOLATOR mode [R]. EQ_MODE picks one (a       | (F1)   |
 // |                   | single constant, read it off his rekordbox: Preferences >  |        |
-// |                   | Controller > Mixer). Default "EQ", rekordbox's default     |        |
-// |                   | (review, fairly sure; TO CONFIRM from a screenshot):       |        |
+// |                   | Controller > Mixer). Default "EQ": UNCONFIRMED, from his   |        |
+// |                   | rekordbox screenshot (final review: 50/50 EQ vs ISOLATOR). |        |
 // |                   | EQ_MIN_DB -26 dB fully CCW (DJM-900NXS2), linear in dB to  |        |
 // |                   | 0 dB at center [B]. "ISOLATOR": full kill (-inf) fully CCW,|        |
 // |                   | (2k)^2 below center (-12 dB at a quarter turn) [B]. Both:  |        |
@@ -102,7 +102,8 @@ export const CLIP_RANGE = 16;                  // the clipper's curve covers +-1
 export const CLIP_CURVE_POINTS = 16385;
 export const TRIM_MAX_DB = 9;
 export const EQ_MAX_DB = 6;
-/** rekordbox Preferences > Controller > Mixer: "EQ" (default) or "ISOLATOR". */
+/** rekordbox Preferences > Controller > Mixer: "EQ" or "ISOLATOR".
+ *  UNCONFIRMED, from his rekordbox screenshot. */
 export const EQ_MODE = "EQ";
 export const EQ_MIN_DB_BY_MODE = Object.freeze({ EQ: -26, ISOLATOR: -Infinity });
 export const EQ_MIN_DB = EQ_MIN_DB_BY_MODE[EQ_MODE];

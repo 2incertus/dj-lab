@@ -71,6 +71,7 @@ function setup(g = grid(120)) {
   return { c, v, d };
 }
 
+const timeOfBeatB = (g, n) => g.first_beat_s + n * 60 / g.bpm;
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
 const circ = (a, b) => { const d = Math.abs(a - b) % 1; return Math.min(d, 1 - d); };
 
@@ -234,6 +235,92 @@ test("synced_play_from_pause_starts_on_the_aligned_frame", () => {
   assert.ok(Math.abs(s - 5.0) <= beatPeriod(gB) / 2 + 1e-9, "cue shifted by at most half a beat");
   assert.ok(near(B.posAt(at), s), "the deck's own model agrees");
   assert.ok(near(B.posAt(at + 1), s + 128 / 131));
+});
+
+/** The synced-start checks shared by PLAY, hot cue and CUE from pause:
+ *  one seek and one start on the same scheduled frame, in phase with A. */
+function assertAlignedStart(after, gA, gB, sA, t0, from) {
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1];
+  assert.ok(at > t0, "start is scheduled, never 'now': nothing plays before the aligned seek");
+  assert.equal(seeks[0][2], at, "seek and start land on the same audio-clock time");
+  assert.ok(after.indexOf(seeks[0]) < after.indexOf(plays[0]), "the seek is queued before the start");
+  const s = seeks[0][1];
+  const aAt = sA + (at - t0);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, aAt)) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.ok(Math.abs(s - from) <= beatPeriod(gB) / 2 + 1e-9, "shifted by at most half a beat");
+  return { s, at };
+}
+
+test("synced_hot_cue_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);           // master at phase 0.25
+  vA.report(sA, 3);
+  vB.report(40.0, 3);                          // B paused somewhere else
+  B.state.hotCues[0] = { start: 5.0, end: null };
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.hotCue(0);
+  const { s, at } = assertAlignedStart(vB.calls.slice(n), gA, gB, sA, 3, 5.0);
+  assert.equal(B.state.playing, true);
+  assert.ok(near(B.posAt(at), s), "the deck's own model agrees");
+  assert.ok(near(B.posAt(at + 1), s + 128 / 131));
+  vB.report(40.0, 3.01);                       // a report from before the start is ignored
+  assert.ok(near(B.posAt(at), s));
+});
+
+test("synced_loop_hot_cue_from_pause_starts_aligned_inside_the_loop", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.75 * beatPeriod(gA);           // phase 0.75: the nearest aligned beat is before IN
+  vA.report(sA, 3);
+  vB.report(40.0, 3);
+  const pB = beatPeriod(gB);
+  const inS = timeOfBeatB(gB, 20), outS = inS + 4 * pB;
+  B.state.hotCues[1] = { start: inS, end: outS };
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.hotCue(1);
+  const after = vB.calls.slice(n);
+  const plays = after.filter((x) => x[0] === "play");
+  const seeks = after.filter((x) => x[0] === "seek");
+  assert.equal(plays.length, 1);
+  assert.equal(seeks.length, 1);
+  const at = plays[0][1], s = seeks[0][1];
+  assert.ok(at > 3 && seeks[0][2] === at, "seek and start on one scheduled frame");
+  assert.ok(s >= inS && s < outS, `start ${s} inside the loop [${inS}, ${outS})`);
+  const errS = circ(phaseAt(gB, s), phaseAt(gA, sA + (at - 3))) * beatPeriod(gA);
+  assert.ok(errS < 0.001, `phase error ${errS * 1000} ms`);
+  assert.deepEqual(vB.loop, [inS, outS]);
+  assert.equal(B.state.loop.active, true);
+});
+
+test("synced_cue_preview_from_pause_starts_on_the_aligned_frame", () => {
+  const gA = grid(128, 0), gB = grid(131, 0.137);
+  const { c, vA, vB, A, B } = twoDecks(gA, gB);
+  A.playPause();
+  c.t = 3;
+  const sA = 10.25 * beatPeriod(gA);
+  vA.report(sA, 3);
+  vB.report(5.0, 3);
+  B.syncPress(A);
+  const n = vB.calls.length;
+  B.cueDown();                                 // Cue Point Sampler on a synced deck
+  const cue = B.state.cuePoint;
+  assertAlignedStart(vB.calls.slice(n), gA, gB, sA, 3, cue);
+  c.t = 4;
+  B.cueUp();                                   // release: back to the cue point itself
+  assert.equal(vB.lastSeek().s, cue);
+  assert.equal(B.state.playing, false);
 });
 
 test("unsynced_play_from_pause_starts_now", () => {
@@ -509,6 +596,22 @@ test("shift_four_beat_arms_the_nearest_saved_loop", () => {
 });
 
 // ---- hot cues and beat jump -------------------------------------------------
+
+test("sub_beat_loop_hot_cue_called_while_playing_engages_and_wraps", () => {
+  const { c, v, d } = setup(grid(120));        // a beat = 0.5 s
+  d.state.hotCues[2] = { start: 10.0, end: 10.125 };   // a 1/4-beat loop hot cue
+  d.playPause();
+  c.t = 2; v.report(30.3, 2);                  // phase 0.6 at the press
+  d.hotCue(2);
+  assert.equal(d.state.loop.active, true);
+  assert.deepEqual(v.loop, [10.0, 10.125]);
+  const { s, at } = v.lastSeek();
+  assert.ok(s >= 10.0 && s < 10.125, `lands inside the loop: ${s}`);
+  for (const dt of [0.05, 0.2, 1, 3.7]) {
+    const p = d.posAt(at + dt);
+    assert.ok(p >= 10.0 && p < 10.125, `still looping ${dt} s later: ${p}`);
+  }
+});
 
 test("hotcue_set_jump_clear", () => {
   const { c, v, d } = setup(grid(120));

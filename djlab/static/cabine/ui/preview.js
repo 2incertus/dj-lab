@@ -78,7 +78,12 @@ export class Preview {
   /** Stop and let go of the decoded track (the phone's memory). */
   async close() {
     this.pause();
-    if (this.voice) this.voice.disconnect();
+    if (this.voice) {
+      // A disconnected worklet whose processor keeps returning true stays
+      // alive with its PCM: tell it to drop the track before letting go.
+      this.voice.unload();
+      this.voice.disconnect();
+    }
     this.voice = null;
     this.deck = null;
     this.track = null;

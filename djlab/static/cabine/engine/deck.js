@@ -37,8 +37,9 @@
 // |                          | a slow steady drag does not warble.                    |        |
 // | TEMPO slider             | Down = faster. rate = 1 + range * (2 * fader - 1).     | M, S   |
 // | SHIFT + BEAT SYNC        | Tempo range +-6 > +-10 > +-16 > WIDE > +-6.            | M      |
-// | Default tempo range      | +-10 (rekordbox preference default; the manual lists   | S, X   |
-// |                          | the cycle but not the default).                        |        |
+// | Default tempo range      | +-10 (spec; the manual lists the cycle but not the     | S, X   |
+// |                          | default, and rekordbox's own default may be +-6).      |        |
+// |                          | UNCONFIRMED, from his rekordbox screenshot.            |        |
 // | BEAT SYNC                | Matches tempo (BPM) and beatgrid phase to the other    | M      |
 // |                          | deck (the master); stays synced; press again cancels.  |        |
 // |                          | Disabled (no-op, state.noGrid) without a reliable grid.| S      |
@@ -75,6 +76,12 @@
 // |                          | playback starts from that point (also when paused);    |        |
 // |                          | a loop hot cue starts loop playback from its in point. |        |
 // |                          | SHIFT + pad clears it.                                 |        |
+// | HOT CUE / CUE from pause | On a synced deck (jog not held) the start is scheduled | B (F2, |
+// | on a synced deck         | SCHEDULE_LEAD_S ahead, shifted at most half a beat to  | review |
+// |                          | the master's phase (inside the loop for a loop hot     | I3)    |
+// |                          | cue), exactly as PLAY. CUE release still returns to the|        |
+// |                          | cue point itself. CONFIRM ON HIS RIG: rekordbox with   |        |
+// |                          | QUANTIZE + SYNC aligning hot cue starts.               |        |
 // | BEAT JUMP pads           | 1: -1, 2: +1, 3: -2, 4: +2, 5: -4, 6: +4, 7: -8, 8: +8 | M      |
 // |                          | beats (rekordbox default order). Phase kept.           |        |
 // | SHIFT + BEAT JUMP pad 7/8| Halve / double the beats on every pad (1/8 to 64).     | M (lim-|
@@ -104,7 +111,9 @@
 // Not from any source (builder, flagged so they can be checked later):
 // - Quantize is on (rekordbox default) and applies to cue, hot cues, loops
 //   and beat jump when the grid is reliable; a quantized hot cue call while
-//   playing keeps the beat phase (jumps to cue + current beat fraction).
+//   playing keeps the beat phase (jumps to cue + current beat fraction); for
+//   a loop hot cue shorter than that fraction the offset folds modulo the
+//   loop length so the loop engages (F2, review M4).
 // - Beat jump during an active loop moves the loop with the playhead.
 // - Calling a point hot cue during a loop exits the loop.
 // - On a following deck the TEMPO slider is ignored until sync is cancelled;
@@ -151,7 +160,7 @@
 import { beatPeriod, beatIndexAt, timeOfBeat, quantize, phaseAt } from "./grid.js";
 
 export const TEMPO_RANGES = [6, 10, 16, 100];          // percent; 100 = WIDE
-export const DEFAULT_RANGE = 10;
+export const DEFAULT_RANGE = 10;                       // UNCONFIRMED, from his rekordbox screenshot
 export const BEAT_JUMP_PADS = [-1, 1, -2, 2, -4, 4, -8, 8];
 export const BEAT_LOOP_PADS = [0.25, 0.5, 1, 2, 4, 8, 16, 32];
 export const BEAT_JUMP_SCALE_MIN = -3;                 // pads down to 1/8 .. 1 beat
@@ -361,20 +370,10 @@ export class Deck {
       }
 
       this.voice.setRate(this._playRate());
-      // Synced start (rekordbox beat sync on play): the start and the phase
-      // jump land on the same frame, SCHEDULE_LEAD_S ahead; nothing sounds
-      // from the unaligned position first.
-      const Ta = T + SCHEDULE_LEAD_S;
-      const aligned = st.syncOn ? this._alignedPos(Ta, s) : null;
-      if (aligned !== null) {
-        this.voice.seek(aligned, Ta);
-        this.voice.play(Ta);
-        this._holdUntil = Ta;
-        this._anchor = { s: aligned, t: Ta, rate: this._currentRate() };
-      } else {
-        this.voice.play();
-        this._anchor = { s, t: T, rate: this._currentRate() };
-      }
+      // Synced start (rekordbox beat sync on play): see _startAligned.
+      if (st.syncOn && this._startAligned(s, T)) return;
+      this.voice.play();
+      this._anchor = { s, t: T, rate: this._currentRate() };
       this._started();
     }
   }
@@ -397,12 +396,32 @@ export class Deck {
     st.cueHeld = true;
     this._cueLatch = false;
     st.playing = true;
-    this.voice.seek(st.cuePoint);
     this.voice.setRate(this._playRate());
+    // Synced: start in the master's phase on one scheduled frame, as PLAY
+    // does; release still returns to the cue point itself.
+    if (st.syncOn && !st.jogTouched && this._startAligned(st.cuePoint, T)) return;
+    this.voice.seek(st.cuePoint);
     this.voice.play();
     this._holdUntil = T;
     this._anchor = { s: st.cuePoint, t: T, rate: this._currentRate() };
     this._started();
+  }
+
+  /** Synced start from pause (PLAY, hot cue, CUE preview): the phase jump
+   *  from `from` and the start land on one frame SCHEDULE_LEAD_S ahead, so
+   *  nothing sounds from the unaligned position first. Call with
+   *  state.playing already true and the rate set. False (nothing done) when
+   *  there is no playing master to align to. */
+  _startAligned(from, T) {
+    const Ta = T + SCHEDULE_LEAD_S;
+    const aligned = this._alignedPos(Ta, from);
+    if (aligned === null) return false;
+    this.voice.seek(aligned, Ta);
+    this.voice.play(Ta);
+    this._holdUntil = Ta;
+    this._anchor = { s: aligned, t: Ta, rate: this._currentRate() };
+    this._started();
+    return true;
   }
 
   cueUp() {
@@ -833,8 +852,18 @@ export class Deck {
       return;
     }
     const wasPlaying = st.playing;
+    if (!wasPlaying && st.syncOn && !st.jogTouched && this._alignedPos(T + SCHEDULE_LEAD_S, h.start) !== null) {
+      // Synced start from pause, as PLAY: the loop (if any) is armed first
+      // so the aligned start lands inside it.
+      if (h.end !== null) this._engageLoop(h.start, h.end, T, { wrapNow: false });
+      else if (st.loop.active) this._exitLoop();
+      st.playing = true;
+      this.voice.setRate(this._playRate());
+      this._startAligned(h.start, T);
+      return;
+    }
     if (h.end !== null) {
-      this._go(h.start, wasPlaying);
+      this._go(h.start, wasPlaying, h.end - h.start);
       this._engageLoop(h.start, h.end, this.now(), { wrapNow: false });
     } else {
       if (st.loop.active) this._exitLoop();
@@ -938,14 +967,18 @@ export class Deck {
     this._anchor = { s, t: T, rate: this._currentRate() };
   }
 
-  /** Hot cue call: quantized and moving = same beat phase, scheduled; else now. */
-  _go(start, moving) {
+  /** Hot cue call: quantized and moving = same beat phase, scheduled; else now.
+   *  loopLen (a loop hot cue): an offset past the loop's length is folded
+   *  modulo it (a loop under a beat), as _intoLoop does, so it lands inside. */
+  _go(start, moving, loopLen = null) {
     const g = this.grid;
     if (moving && this.state.quantize && !this.state.noGrid) {
       const T = this.now() + SCHEDULE_LEAD_S;
       const dph = phaseAt(g, this.posAt(T)) - phaseAt(g, start);
       const k = dph - Math.floor(dph);
-      this._seekAt(clamp(start + k * beatPeriod(g), 0, this._duration), T);
+      let off = k * beatPeriod(g);
+      if (loopLen > 0 && off >= loopLen) off %= loopLen;
+      this._seekAt(clamp(start + off, 0, this._duration), T);
     } else {
       this._seekNow(start, this.now());
     }
