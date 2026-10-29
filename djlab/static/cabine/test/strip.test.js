@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   parsePeaks, formatTime, deckLine, meterStep, meterFraction, beatMarks, playheadTime, stripLayout,
-  peakColumns, METER_HOLD_S, METER_DECAY_DB_S, METER_FLOOR_DB, WINDOW_S,
+  peakColumns, drawTextPx, pxContext, METER_HOLD_S, METER_DECAY_DB_S, METER_FLOOR_DB, WINDOW_S,
 } from "../ui/strip.js";
 import { masterDeck, fxBpm } from "../engine/rig.js";
 
@@ -128,4 +128,72 @@ test("rec_label_shows_elapsed_mm_ss_while_recording", async () => {
   assert.equal(recLabel(true, 0), "00:00");
   assert.equal(recLabel(true, 75.9), "01:15");
   assert.equal(recLabel(true, 3725), "62:05");
+});
+
+test("strip_text_is_drawn_with_no_transform_in_backing_pixels", () => {
+  // Playwright's WebKit applies a scaling transform twice on the first draw
+  // after a canvas sat idle (text came out 3x too big at dpr 3); the jog display
+  // draws with the identity transform, and so does the strip's text now
+  const calls = [];
+  let t = [3, 0, 0, 3, 0, 0];
+  const g = {
+    font: "", fillStyle: "", textBaseline: "",
+    save() { calls.push(["save", [...t]]); }, restore() { calls.push(["restore"]); t = [3, 0, 0, 3, 0, 0]; },
+    setTransform(...m) { t = m; },
+    fillText(text, x, y) { calls.push(["fillText", text, x, y, [...t], this.font, this.fillStyle]); },
+    measureText(text) { return { width: text.length * 10 * (parseFloat(this.font.split(" ")[1]) / 10) }; },
+  };
+  const adv = drawTextPx(g, 3, "1 no track", 4, 9, 10, "#abc");
+  const ft = calls.find((c) => c[0] === "fillText");
+  assert.deepEqual(ft[4], [1, 0, 0, 1, 0, 0], "drawn with the identity transform");
+  assert.equal(ft[2], 12); assert.equal(ft[3], 27);                 // CSS px x dpr
+  assert.match(ft[5], /^600 30px /, "the font in backing pixels");
+  assert.equal(ft[6], "#abc");
+  assert.ok(Math.abs(adv - 100) < 1e-9, "the advance comes back in CSS px");
+  assert.deepEqual(t, [3, 0, 0, 3, 0, 0], "the caller's transform is restored");
+});
+
+test("slim_band_puts_the_title_beside_the_waveform", () => {
+  // the phone layout's band is 31 to 37 px: two lanes of 15 to 18 px. A title
+  // row over the waveform left it 5 or 6 px tall; beside it, the waveform
+  // takes the lane's whole height
+  for (const H of [31, 37]) {
+    const L = stripLayout(750, H, 70);
+    for (const [i, a] of L.lanes.entries()) {
+      assert.ok(a.wave.h >= H / 2 - 1.5, `H ${H}: waveform ${a.wave.h} px tall`);
+      assert.ok(a.text.x >= 70 && a.text.x + a.text.w <= a.wave.x, `H ${H}: the title left of the waveform`);
+      assert.ok(a.text.h >= 9, `H ${H}: title row ${a.text.h}`);
+      assert.ok(a.over.x >= a.text.x && a.over.x + a.over.w <= a.wave.x && a.over.y >= a.text.y + a.text.h - 0.5
+        && a.over.y + a.over.h <= a.y + a.h + 1e-9, `H ${H}: the overview under the title`);
+      assert.ok(a.wave.x + a.wave.w <= L.panel.x, "waveform before the panel");
+      assert.ok(Math.abs(a.y - i * H / 2) < 1e-9);
+    }
+    assert.ok(Math.abs(L.pps - L.lanes[0].wave.w / WINDOW_S) < 1e-9);
+    assert.equal(L.slim, true);
+  }
+  assert.equal(stripLayout(750, 47, 70).slim, false, "spread's 47 px band keeps the title row on top");
+});
+
+test("the_strip_draws_everything_in_backing_pixels", async () => {
+  // the WebKit bug is not only the text's: a scaling transform set for the
+  // frame was applied twice too. So the strip never sets one; pxContext scales
+  // the coordinates instead (CSS px in, backing pixels out)
+  const calls = [];
+  const g = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => calls.push([k, ...a])), set: (t, k, v) => { t[k] = v; return true; } });
+  const px = pxContext(g, 3);
+  px.fillRect(1, 2, 3, 4);
+  px.rect(1, 1, 2, 2);
+  px.moveTo(1, 2); px.lineTo(3, 4);
+  px.drawImage("img", 5, 6, 7, 8);
+  px.drawImage("tile", 0, 0, 10, 20, 1, 2, 3, 4);
+  px.fillStyle = "#123";
+  px.save(); px.beginPath(); px.clip(); px.closePath(); px.fill(); px.restore();
+  assert.deepEqual(calls.slice(0, 6), [["fillRect", 3, 6, 9, 12], ["rect", 3, 3, 6, 6], ["moveTo", 3, 6], ["lineTo", 9, 12],
+    ["drawImage", "img", 15, 18, 21, 24], ["drawImage", "tile", 0, 0, 10, 20, 3, 6, 9, 12]]);
+  assert.equal(g.fillStyle, "#123");
+  assert.deepEqual(calls.slice(6).map((c) => c[0]), ["save", "beginPath", "clip", "closePath", "fill", "restore"]);
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../ui/strip.js", import.meta.url), "utf8");
+  const sets = [...src.matchAll(/setTransform\(([^)]*)\)/g)].map((m) => m[1].replace(/\s/g, ""));
+  assert.ok(sets.length > 0 && sets.every((a) => a === "1,0,0,1,0,0"), `only identity transforms: ${sets}`);
 });

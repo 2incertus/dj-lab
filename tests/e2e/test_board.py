@@ -10,10 +10,12 @@ Linux has no notch, so env() reads 0), and the Galaxy, 760 x 360 in Chromium
 with touch. Multi-touch goes through CDP Input.dispatchTouchEvent, so it is
 Chromium only.
 
-v2: the default layout is "panels" (no strip band, the board as tall as the
-screen allows, panel slots beside the mixer); small parts are drawn bigger and
-answer in hit zones larger than what is drawn (ui/board-layout.js hitMap),
-resolved by their section and handed to the widget.
+v2: the default layout is "phone" (a slim waveform band on top, the decks
+re-proportioned for a phone, the mixer at the panel's proportions; "panels",
+"spread" and "exact" stay for comparison). Small parts are drawn bigger and
+answer in hit zones larger than what is drawn (ui/board-layout.js hitMap,
+split by the nearest drawn outline; in phone a channel knob answers across its
+whole row), resolved by their section and handed to the widget.
 """
 
 from pathlib import Path
@@ -442,11 +444,21 @@ def test_knob_drag_from_its_zone_is_a_knob_drag(phone):
     hi = g["drawn"]["ch1-hi"]
     p = zone_point(page, "ch1-hi", hi)
     page.evaluate("() => { window.cabine.boardLog.length = 0; }")
-    page.mouse.move(p["x"], p["y"])
-    page.mouse.down()
-    page.mouse.move(p["x"], p["y"] - 20, steps=4)
-    page.mouse.move(p["x"] + 80, p["y"] - 60, steps=8)        # across other zones: still the knob
-    page.mouse.up()
+    path = [(p["x"], p["y"])] + [(p["x"], p["y"] - 5 * k) for k in range(1, 5)] \
+        + [(p["x"] + 10 * k, p["y"] - 20 - 5 * k) for k in range(1, 9)]          # across other zones: still the knob
+    if phone["engine"] == "chromium":
+        # a real touch (CDP), as a thumb does it
+        cdp = phone["ctx"].new_cdp_session(page)
+        touch(cdp, "touchStart", {0: path[0]})
+        for pt in path[1:]:
+            touch(cdp, "touchMove", {0: pt})
+        touch(cdp, "touchEnd", {})
+    else:
+        page.mouse.move(*path[0])
+        page.mouse.down()
+        for pt in path[1:]:
+            page.mouse.move(*pt)
+        page.mouse.up()
     entries = log(page)
     assert entries and {e["id"] for e in entries} == {"ch1-hi"}, (p, entries)
     assert abs(entries[-1]["value"] - (0.5 + 60 / 180)) < 0.02, entries[-1]
@@ -754,3 +766,90 @@ def test_phone_band_keeps_caixa_rec_and_browse(name, chromium, webkit, base_url,
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def test_a_tap_at_the_decks_top_edge_is_not_caixa(galaxy):
+    """Regression: Chrome's touch adjustment moved a tap 2 to 4 px inside a
+    deck's top edge onto caixa in the band above (it opened the crate). The
+    board answers for itself: IN takes it, the board stays."""
+    page, ctx = galaxy
+    assert page.evaluate("() => window.cabine.board.layoutMode") == "phone"
+    g = page.evaluate(GEO)
+    page.evaluate(RECORD)
+    top = g["secs"]["deck1"]["t"]
+    for deck in (1, 2):
+        d = g["drawn"][f"d{deck}-in"]
+        for k in (2, 3, 4):
+            page.touchscreen.tap(d["cx"], top + k)
+            assert took(page) == [f"d{deck}-in"], f"deck {deck}: {k} px inside the top edge"
+            page.wait_for_timeout(20)
+    assert page.evaluate("() => window.cabine.screen") == "board"
+    expect(page.locator(".cab-crate")).to_have_count(0)
+
+
+def test_two_routers_shift_per_deck_and_a_mixer_knob(galaxy):
+    """Thumbs on three sections at once: deck 1 SHIFT, a mixer knob being
+    turned, deck 2 SHIFT. Each section's router keeps its own pointers, and
+    SHIFT stays per deck. (CDP releases every point at once, so the second
+    round holds deck 2's SHIFT only and taps a pad on each deck.)"""
+    page, ctx = galaxy
+    g = page.evaluate(GEO)
+    d = g["drawn"]
+    page.evaluate("() => { window.cabine.boardLog.length = 0; }")
+    cdp = ctx.new_cdp_session(page)
+    s1, s2, k = (d["d1-shift"]["cx"], d["d1-shift"]["cy"]), (d["d2-shift"]["cx"], d["d2-shift"]["cy"]), d["ch2-mid"]
+    kp = (k["cx"], k["cy"])
+    shifts = "() => [window.cabine.board.shift(1), window.cabine.board.shift(2)]"
+    touch(cdp, "touchStart", {0: s1})
+    touch(cdp, "touchStart", {0: s1, 1: kp})
+    for j in range(1, 4):
+        touch(cdp, "touchMove", {0: s1, 1: (kp[0], kp[1] - 10 * j)})
+    assert page.evaluate(shifts) == [True, False]
+    touch(cdp, "touchStart", {0: s1, 1: (kp[0], kp[1] - 30), 2: s2})
+    assert page.evaluate(shifts) == [True, True]
+    for j in range(4, 7):
+        touch(cdp, "touchMove", {0: s1, 1: (kp[0], kp[1] - 10 * j), 2: s2})
+    touch(cdp, "touchEnd", {})
+    assert page.evaluate(shifts) == [False, False]
+    knob = [e for e in log(page) if e["id"] == "ch2-mid"]
+    assert knob and abs(knob[-1]["value"] - (0.5 + 60 / 180)) < 0.02, knob[-1:]
+    # deck 2's SHIFT held, the knob turning back down: a pad on deck 1 plays its
+    # hot cue (no SHIFT there), a pad on deck 2 is SHIFT + pad
+    page.evaluate("() => { window.cabine.boardLog.length = 0; }")
+    p1, p2 = d["d1-pad1"], d["d2-pad1"]
+    touch(cdp, "touchStart", {2: s2})
+    touch(cdp, "touchStart", {2: s2, 1: kp})
+    touch(cdp, "touchMove", {2: s2, 1: (kp[0], kp[1] + 20)})
+    touch(cdp, "touchStart", {2: s2, 1: (kp[0], kp[1] + 20), 3: (p1["cx"], p1["cy"])})
+    assert page.evaluate(shifts) == [False, True]
+    touch(cdp, "touchStart", {2: s2, 1: (kp[0], kp[1] + 20), 3: (p1["cx"], p1["cy"]), 4: (p2["cx"], p2["cy"])})
+    touch(cdp, "touchEnd", {})
+    acts = [(e["action"], e["deck"]) for e in log(page)]
+    assert ("deck.hotCue", 1) in acts and ("deck.shiftHotCue", 2) in acts, acts
+    assert ("deck.shiftHotCue", 1) not in acts and ("deck.hotCue", 2) not in acts, acts
+    assert [e for e in log(page) if e["id"] == "ch2-mid"], "the knob turned in the same round"
+    assert page.evaluate(shifts) == [False, False]
+
+
+@pytest.mark.parametrize("ch", [1, 2])
+def test_phone_knob_turns_from_its_rows_outer_end(ch, galaxy):
+    """Ruling R3-v2: a channel knob answers across its whole row; a touch drag
+    (CDP, a thumb) that starts at the row's outer end turns it."""
+    page, ctx = galaxy
+    for row, action in (("trim", "mixer.setTrim"), ("hi", "mixer.setEq"), ("low", "mixer.setEq"), ("cfx", "mixer.setCfx")):
+        cid = f"ch{ch}-{row}"
+        z = page.evaluate("(id) => { const b = window.cabine.board, r = b.board.getBoundingClientRect(), z = b.geometry().map.rowZone(id);"
+                          " return z && {x: r.left + z.x, y: r.top + z.y, w: z.w, h: z.h}; }", cid)
+        assert z, cid
+        x = z["x"] + 2 if ch == 1 else z["x"] + z["w"] - 2
+        y = z["y"] + z["h"] / 2
+        assert page.evaluate("([x, y]) => window.cabine.board.hitTest(x, y)", [x, y]) == cid
+        page.evaluate("() => { window.cabine.boardLog.length = 0; }")
+        cdp = ctx.new_cdp_session(page)
+        touch(cdp, "touchStart", {0: (x, y)})
+        for j in range(1, 7):
+            touch(cdp, "touchMove", {0: (x, y - 6 * j)})
+        touch(cdp, "touchEnd", {})
+        entries = log(page)
+        assert entries and {e["id"] for e in entries} == {cid} and entries[-1]["action"] == action, (cid, entries)
+        assert entries[-1]["value"] > 0.5 + 30 / 180, entries[-1]

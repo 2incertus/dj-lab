@@ -167,8 +167,7 @@ test("crossfader_clears_the_home_indicator_zone", () => {
   const xf = byId.get("xfader");
   assert.equal(LAYOUT, "phone", "phone is the default (Cabine v2 V1b); panels, spread and exact stay for comparison");
   assert.ok(XFADER_CLEAR_PX >= 34);
-  // "phone" re-solves the decks' proportions (test/board-layout.test.js covers it)
-  for (const mode of LAYOUTS.filter((m) => m !== "phone")) {
+  for (const mode of LAYOUTS) {
     for (const { W, H, insets } of PHONES) {
       const b = fitBoard({ W, H, insets, mode });
       const tag = `${mode} ${W}x${H}`;
@@ -179,13 +178,27 @@ test("crossfader_clears_the_home_indicator_zone", () => {
       assert.ok(b.top >= b.stripBottom - 1e-9, `${tag}: below the strip`);
       if (mode === "panels") assert.equal(b.stripBottom, b.stripTop, `${tag}: no strip band`);
       assert.ok(b.top + b.height <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-9, `${tag}: above the home bar`);
-      assert.equal(b.stripBottom - b.stripTop, Math.round(STRIP_SHARE[mode] * H));
-      // every control lands inside the board, inside the safe area, and keeps its shape
+      if (mode === "phone") {
+        assert.equal(b.stripBottom - b.stripTop, Math.max(30, Math.round(0.1 * (H - Math.max(insets.bottom, SAFE_FALLBACK.bottom)))));
+      } else {
+        assert.equal(b.stripBottom - b.stripTop, Math.round(STRIP_SHARE[mode] * H));
+      }
+      // every control lands inside its section (so inside the board and the
+      // safe area); outside "phone" it also keeps the photo's shape
+      const drawn = placeControls(b);
       for (const c of CONTROLS) {
+        const d = drawn.get(c.id);
+        const s = b.sections.find((t) => t.key === d.section);
+        assert.ok(d.x >= s.left - 1e-6 && d.x + d.w <= s.left + s.width + 1e-6, `${tag}: ${c.id} x inside its section`);
+        assert.ok(d.y >= -1e-6 && d.y + d.h <= b.height + 1e-6, `${tag}: ${c.id} y inside its section`);
+        assert.ok(b.top + d.y + d.h <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-6, `${tag}: ${c.id} above the home bar`);
+        if (mode === "phone") continue;          // phone re-solves the decks (test/board-layout.test.js)
         const p = placeBox(c, b);
         assert.ok(p.left >= b.left - 1e-6 && p.left + p.width <= b.left + b.width + 1e-6, `${tag}: ${c.id} x`);
         assert.ok(Math.abs(p.width / p.height - (c.w * BOARD_ASPECT) / c.h) < 1e-9, `${tag}: ${c.id} proportions`);
       }
+      assert.ok(b.top + drawn.get("xfader").y + drawn.get("xfader").h <= H - XFADER_CLEAR_PX + 1e-9, `${tag}: drawn crossfader clears`);
+      if (mode === "phone") continue;
       const secs = b.sections;
       assert.equal(secs[0].left, 0);
       if (mode === "exact") {

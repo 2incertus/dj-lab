@@ -31,8 +31,8 @@
 //
 // Every jog carries its jog display canvas (jogCanvases(), drawn by
 // ui/jog-screen.js from app.js's frame loop), pointer-events: none.
-// "panels": the two gaps beside the mixer are panelSlots() (screen CSS px);
-// panels() gives their two elements (Task V2 draws the deck panels in them).
+// "panels" (V1, for comparison): the two gaps beside the mixer are
+// panelSlots() (screen CSS px) and panels() their two elements.
 // Until then the left one holds the caixa button and the right one REC
 // (recHost); the strip (browse list) shows over deck 1 while the list is open.
 //
@@ -423,7 +423,6 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       st.bottom = "auto"; st.margin = "0"; st.transform = "none"; st.textAlign = "center"; st.padding = "0";
       el.dataset.side = l.side;
       el.classList.toggle("cab-board-sub-in", l.part === "sub" && l.side === "in");
-      el.classList.toggle("cab-board-unfit", !l.fits);
       const c = l.owner ? byId.get(l.owner) : null;
       const icon = c && c.phones && l.part === "label" && l.icon !== false ? PHONES_ICON : "";
       const html = icon + esc(l.text);
@@ -566,7 +565,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     jogCanvases: () => [1, 2].map((n) => els.get(`d${n}-jog`)?.querySelector(".cab-jog-screen") || null),
     /** The two panel slots, screen CSS px [{x, y, w, h}, ...] (empty gaps outside "panels"). */
     panelSlots: () => (geo ? geo.slots.map((r) => ({ ...r })) : []),
-    /** The two panel slot elements (Task V2 draws the deck panels in them). */
+    /** The two panel slot elements ("panels" layout). */
     panels: () => panelEls,
     layoutMode: mode,
     hitTest,

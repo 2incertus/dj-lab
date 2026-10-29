@@ -11,17 +11,20 @@
 //
 // The panel is three sections side by side, as on the hardware: deck 1, the
 // mixer (with Beat FX and browse), deck 2 (SECTIONS, percent of the panel's
-// width). Three layouts:
-//   "panels"  (default, Cabine v2) no strip band: the board takes the whole
+// width). Four layouts:
+//   "phone"   (default, Cabine v2 V1b) a slim waveform band on top, the mixer
+//             at the panel's proportions in the middle, the decks widened to
+//             the rest and re-proportioned for a phone (fitPhone, phoneDeck,
+//             below).
+//   "panels"  (V1, for comparison) no strip band: the board takes the whole
 //             usable height (PANELS_TOP_PX from the top, down to the bottom
 //             rules), the sections scale uniformly to it, deck 1 at the left
 //             safe edge, deck 2 at the right one, the mixer centred. The two
-//             gaps left over are the panel slots (panelSlots(), CSS px), where
-//             the deck panels go (Task V2).
+//             gaps left over are the panel slots (panelSlots(), CSS px).
 //   "spread"  a strip band on top (STRIP_SHARE), the sections sized by the
 //             height left and spread across the whole width (ruling R23).
 //   "exact"   the whole panel at BOARD_ASPECT, centered: what the photo shows.
-// All shrink (keeping proportions) until the crossfader clears the bottom.
+// All shrink until the crossfader clears the bottom.
 //
 // Drawn sizes (placeControls). Inside a section every part keeps the photo's
 // centre. At phone size the FLX4's buttons are tiny, so small parts grow
@@ -96,7 +99,7 @@ export function sectionOf(x) {
 /**
  * @param W, H     viewport in CSS px (landscape)
  * @param insets   {left, right, bottom, top}: env(safe-area-inset-*) values
- * @param mode     "panels" (default) | "spread" | "exact"
+ * @param mode     "phone" (default) | "panels" | "spread" | "exact"
  * @returns {mode, left, top, width, height, unit, sections: [{key, x0, x1, left, width}],
  *           stripTop, stripBottom, safe}; section left is relative to the board,
  *           unit = px per percent of the panel's height (a percent of its width
@@ -241,10 +244,10 @@ export function phoneDeck(Wd, Hd) {
   for (let i = 0; i < 8; i++) {
     b[`pad${i + 1}`] = { x: padsX + (i % 4) * (pw + P.padGap), y: padY + Math.floor(i / 4) * (ph + P.padGap), w: pw, h: ph, shape: "rect" };
   }
-  const cueD = Math.min(C, ph + P.padGap / 2);
+  const cueD = Math.min(C, ph);                              // CUE and PLAY: one per pad row
   b.shift = { x: P.edge, y: modeY, w: C, h: btn, shape: "rect" };
-  b.cue = circle(P.edge + C / 2, padY + ph / 2, Math.min(cueD, ph));
-  b.play = circle(P.edge + C / 2, padY + ph + P.padGap + ph / 2, Math.min(cueD, ph));
+  b.cue = circle(P.edge + C / 2, padY + ph / 2, cueD);
+  b.play = circle(P.edge + C / 2, padY + ph + P.padGap + ph / 2, cueD);
   // the tempo fader: from under SYNC's legends to the deck's bottom, at its right edge
   const tTop = loopBottom + 2 * (base + 2);
   const tBottom = Hd - P.edge;
@@ -518,9 +521,11 @@ export function hitMap(fit, drawn, controls = CONTROLS) {
     return Math.hypot(x - cxOf(d), y - cyOf(d)) <= d.w / 2;
   };
   const inRect = (x, y, r) => x >= r.x && x < rightOf(r) && y >= r.y && y < bottomOf(r);
+  const { spans, rowZones } = fit.mode === "phone" ? knobRows(drawn) : { spans: null, rowZones: new Map() };
   function at(x, y) {
     for (const b of big) if (inShape(x, y, b.d)) return b.id;
     for (const s of small) if (inShape(x, y, s.d)) return s.id;
+    for (const [id, z] of rowZones) if (inRect(x, y, z)) return id;
     let best = null, bd = Infinity, bc = Infinity;
     for (const s of small) {
       if (!inRect(x, y, s.region)) continue;
@@ -555,7 +560,48 @@ export function hitMap(fit, drawn, controls = CONTROLS) {
       ? ["neighbour", "big", "section"].find((k) => whys.includes(k)) || null : null;
     return { w, h, limit };
   }
-  return { at, extent, region: (id) => byId.get(id)?.region || null };
+  return {
+    at, extent, region: (id) => byId.get(id)?.region || null,
+    /** phone: a channel knob's row zone {x, y, w, h}, else null. */
+    rowZone: (id) => (rowZones.has(id) ? { ...rowZones.get(id) } : null),
+    /** phone: channel n's span across the mixer {x, w}, else null. */
+    channelSpan: (n) => (spans ? { ...spans[n] } : null),
+  };
+}
+
+/** Ruling R3-v2, phone layout: each channel knob (TRIM, HI, MID, LOW, CFX)
+ *  answers across its whole row inside its channel, so a vertical drag can
+ *  start anywhere on the row. A channel runs from halfway between the
+ *  mixer's outer column (MIC, SMART, phones | MASTER, Beat FX) and its knobs
+ *  to the middle between the two channels' knobs; a row from halfway to the
+ *  row above (TRIM: to LOAD) to halfway to the row below (CFX: to the channel
+ *  CUE). Drawn parts keep their own touches. */
+const KNOB_ROWS = ["trim", "hi", "mid", "low", "cfx"];
+const LEFT_COLUMN = ["mic-level", "smart-cfx", "phones-mix", "phones-level", "smart-fader"];
+const RIGHT_COLUMN = ["master-level", "master-cue", "fx-ch", "fx-select", "fx-beat-down", "fx-beat-up", "fx-level", "fx-on"];
+function knobRows(drawn) {
+  const get = (id) => drawn.get(id);
+  const knobs = (n) => KNOB_ROWS.map((r) => get(`ch${n}-${r}`)).filter(Boolean);
+  const outer = (ids) => ids.map(get).filter(Boolean);
+  if (knobs(1).length < KNOB_ROWS.length || knobs(2).length < KNOB_ROWS.length) return { spans: null, rowZones: new Map() };
+  const leftEdge = (Math.max(...outer(LEFT_COLUMN).map(rightOf)) + Math.min(...knobs(1).map((k) => k.x))) / 2;
+  const mid = (cxOf(get("ch1-hi")) + cxOf(get("ch2-hi"))) / 2;
+  const rightEdge = (Math.max(...knobs(2).map(rightOf)) + Math.min(...outer(RIGHT_COLUMN).map((k) => k.x))) / 2;
+  const spans = { 1: { x: leftEdge, w: mid - leftEdge }, 2: { x: mid, w: rightEdge - mid } };
+  const rowZones = new Map();
+  for (const n of [1, 2]) {
+    const cys = KNOB_ROWS.map((r) => cyOf(get(`ch${n}-${r}`)));
+    const above = cyOf(get(`load${n}`) || get(`ch${n}-trim`));
+    const below = cyOf(get(`ch${n}-cue`) || get(`ch${n}-cfx`));
+    KNOB_ROWS.forEach((r, i) => {
+      const k = get(`ch${n}-${r}`);
+      // never shorter than the knob itself (TRIM sits closer to LOAD than to HI)
+      const y0 = Math.min(k.y, (cys[i] + (i === 0 ? above : cys[i - 1])) / 2);
+      const y1 = Math.max(bottomOf(k), (cys[i] + (i === KNOB_ROWS.length - 1 ? below : cys[i + 1])) / 2);
+      rowZones.set(`ch${n}-${r}`, { x: spans[n].x, y: y0, w: spans[n].w, h: y1 - y0 });
+    });
+  }
+  return { spans, rowZones };
 }
 
 // ---- legends -------------------------------------------------------------------------

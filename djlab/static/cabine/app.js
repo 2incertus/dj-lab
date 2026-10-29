@@ -355,14 +355,14 @@ function tick(now) {
   app.engine.fx.refresh();                                       // cheap when nothing changed
 }
 
-/** The FLX4 board over the engine. opts.layout: "panels" | "spread" | "exact"
+/** The FLX4 board over the engine. opts.layout: "phone" (default) | "panels" | "spread" | "exact"
  *  (ui/board-layout.js, also ?board=exact); opts.demo: the Task 9 stand-in
  *  bindings (no audio; the board's own e2e tests use them). */
 function showBoard(opts = {}) {
   leave();
   app.screen = "board";
   root.dataset.screen = "board";
-  // "panels" by default; ?board=spread or ?board=exact for comparison
+  // "phone" by default; ?board=panels, ?board=spread or ?board=exact for comparison
   const layout = opts.layout || new URLSearchParams(location.search).get("board") || undefined;
   if (opts.demo) {
     const demo = makeDemoBindings();

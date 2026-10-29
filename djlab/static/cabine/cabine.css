@@ -384,7 +384,6 @@ html, body, .cab-root { touch-action: manipulation; }
 .cab-board-ctl { position: absolute; touch-action: none; cursor: pointer; }
 .cab-board-ctl * { pointer-events: none; }
 .cab-board-ctl.cab-routed { pointer-events: none; }
-.cab-board-unfit { outline: 1px dashed #ff4d3d88; }
 .cab-board-face {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
   font-weight: 700; font-size: min(var(--fs), calc(var(--u) * var(--k, 99))); line-height: 0.95; letter-spacing: 0;

@@ -43,6 +43,8 @@ export const METER_HOLD_S = 1.5;
 export const METER_DECAY_DB_S = 20;
 export const METER_FLOOR_DB = -48;
 export const FLASH_MS = 1200;
+/** Lanes shorter than this put the title beside the waveform, not over it. */
+export const SLIM_LANE_PX = 22;
 const PANEL_W = 96;                      // Beat FX + meters
 const REC_W = 40;
 const GAP = 6;
@@ -148,6 +150,28 @@ export function stripLayout(W, H, left = 0) {
   const x0 = left;
   const laneW = Math.max(40, panelX - GAP - x0);
   const laneH = H / 2;
+  if (laneH < SLIM_LANE_PX) {
+    // the phone layout's slim band: title (and the overview under it) at the
+    // lane's left, the waveform the lane's whole height beside it
+    const textW = clamp(Math.round(laneW * 0.28), 110, 220);
+    const waveX = x0 + textW + GAP, waveW = Math.max(40, laneW - textW - GAP);
+    const lanes = [0, 1].map((i) => {
+      const y = i * laneH;
+      return {
+        y, h: laneH,
+        text: { x: x0, y, w: textW, h: laneH - 4 },
+        over: { x: x0 + 2, y: y + laneH - 4, w: textW - 4, h: 3 },
+        wave: { x: waveX, y, w: waveW, h: laneH - (i === 0 ? 1 : 0) },
+      };
+    });
+    return {
+      W, H, lanes, slim: true,
+      list: { x: x0, y: 0, w: laneW, h: H },
+      panel: { x: panelX, y: 0, w: PANEL_W, h: H },
+      rec: { x: recX, y: Math.max(0, (H - 28) / 2), w: REC_W, h: Math.min(28, H) },
+      pps: waveW / WINDOW_S,
+    };
+  }
   const textH = clamp(Math.round(laneH * 0.42), 9, 13);
   const overW = clamp(Math.round(laneW * 0.22), 60, 180);
   const lanes = [0, 1].map((i) => {
@@ -160,7 +184,7 @@ export function stripLayout(W, H, left = 0) {
     };
   });
   return {
-    W, H, lanes,
+    W, H, lanes, slim: false,
     list: { x: x0, y: 0, w: laneW, h: H },
     panel: { x: panelX, y: 0, w: PANEL_W, h: H },
     rec: { x: recX, y: Math.max(0, (H - 28) / 2), w: REC_W, h: Math.min(28, H) },
@@ -176,6 +200,44 @@ const COL = {
   meterLo: "#5fe05a", meterMid: "#ff9d3c", meterHi: "#ff4d3d", flash: "#ff9d3c",
 };
 const FONT = (px, w = 600) => `${w} ${px}px Archivo, system-ui, -apple-system, sans-serif`;
+
+/** The strip's drawing context in CSS px over a context that keeps the
+ *  identity transform: coordinates are scaled by k (the device pixel ratio)
+ *  here instead of by a canvas transform. Playwright's WebKit applies a
+ *  scaling transform twice on the first draw after the canvas sat idle (the
+ *  band's text came out three times too big, a frame's whole drawing could);
+ *  with no transform set it draws right. Only what the strip uses. */
+export function pxContext(g, k) {
+  return {
+    fillRect: (x, y, w, h) => g.fillRect(x * k, y * k, w * k, h * k),
+    rect: (x, y, w, h) => g.rect(x * k, y * k, w * k, h * k),
+    moveTo: (x, y) => g.moveTo(x * k, y * k),
+    lineTo: (x, y) => g.lineTo(x * k, y * k),
+    drawImage: (img, ...a) => (a.length === 4
+      ? g.drawImage(img, a[0] * k, a[1] * k, a[2] * k, a[3] * k)
+      : g.drawImage(img, a[0], a[1], a[2], a[3], a[4] * k, a[5] * k, a[6] * k, a[7] * k)),
+    save: () => g.save(), restore: () => g.restore(), beginPath: () => g.beginPath(), clip: () => g.clip(),
+    closePath: () => g.closePath(), fill: () => g.fill(),
+    get fillStyle() { return g.fillStyle; }, set fillStyle(v) { g.fillStyle = v; },
+    get textBaseline() { return g.textBaseline; }, set textBaseline(v) { g.textBaseline = v; },
+  };
+}
+
+/** Text at (x, y) CSS px, size px, drawn in backing-store pixels with the
+ *  identity transform (Playwright's WebKit applies a scaling transform twice
+ *  on the first draw after the canvas sat idle, so the band's text came out
+ *  three times too big; the jog display draws the same way). The caller's
+ *  textBaseline holds. Returns the text's advance in CSS px. */
+export function drawTextPx(g, dpr, text, x, y, px, colour, weight = 600) {
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.font = FONT(px * dpr, weight);
+  g.fillStyle = colour;
+  g.fillText(text, x * dpr, y * dpr);
+  const w = g.measureText(text).width / dpr;
+  g.restore();
+  return w;
+}
 
 function makeCanvas(w, h) {
   if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(w, h);
@@ -444,8 +506,8 @@ export class Strip {
     this._last = now;
     if (!this.L) return false;
     this.stats.frames++;
-    const g = this.g;
-    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.g.setTransform(1, 0, 0, 1, 0, 0);            // never a scaling one (pxContext)
+    const g = this.px = pxContext(this.g, this.dpr);
     if (this._full) {
       g.fillStyle = COL.bg;
       g.fillRect(0, 0, this.L.W, this.L.H);
@@ -475,7 +537,7 @@ export class Strip {
   }
 
   _drawLane(i, T, now) {
-    const g = this.g;
+    const g = this.px;
     const lane = this.L.lanes[i];
     const Ln = this.lanes[i];
     const d = this._deck(i);
@@ -551,7 +613,7 @@ export class Strip {
   }
 
   _drawText(i, lane, d, flash) {
-    const g = this.g;
+    const g = this.px;
     const r = lane.text;
     g.save();
     g.fillStyle = COL.bg;
@@ -560,11 +622,10 @@ export class Strip {
     g.rect(r.x, r.y, r.w, r.h);
     g.clip();
     const fs = clamp(r.h - 2, 8, 11);
-    g.font = FONT(fs);
     g.textBaseline = "middle";
     const y = r.y + r.h / 2 + 0.5;
     let x = r.x + 2;
-    const put = (text, colour) => { g.fillStyle = colour; g.fillText(text, x, y); x += g.measureText(text).width; };
+    const put = (text, colour) => { x += drawTextPx(this.g, this.dpr, text, x, y, fs, colour); };
     put(`${i + 1} `, COL.dim);
     if (flash) put(flash, COL.flash);
     else if (!d) put(this.lanes[i].loading ? "loading" : "no track", COL.dim);
@@ -576,7 +637,7 @@ export class Strip {
   }
 
   _drawOverview(lane, Ln, ox) {
-    const g = this.g;
+    const g = this.px;
     const r = lane.over;
     g.fillStyle = COL.bg;
     g.fillRect(r.x - 1, r.y - 1, r.w + 2, r.h + 2);
@@ -594,7 +655,7 @@ export class Strip {
   }
 
   _drawPanel(now, dt) {
-    const g = this.g;
+    const g = this.px;
     const p = this.L.panel;
     const fx = this.fx;
     for (let c = 0; c < 2; c++) {
@@ -612,11 +673,11 @@ export class Strip {
     g.fillStyle = COL.bg;
     g.fillRect(p.x, p.y, p.w, p.h);
     const rowH = Math.min(14, p.h / 3.2);
-    g.font = FONT(clamp(rowH - 3, 8, 10));
+    const fs = clamp(rowH - 3, 8, 10);
     g.textBaseline = "middle";
     let x = p.x;
     const y = p.y + rowH / 2 + 1;
-    const put = (t, col) => { g.fillStyle = col; g.fillText(t, x, y); x += g.measureText(t).width; };
+    const put = (t, col) => { x += drawTextPx(this.g, this.dpr, t, x, y, fs, col); };
     if (fx) {
       const fi = FX_FRACTIONS.indexOf(fx.state.fraction);
       put(fx.state.name.toUpperCase(), COL.text);
@@ -629,9 +690,7 @@ export class Strip {
     const lab = 10;
     this.meters.forEach((m, c) => {
       const my = p.y + rowH + 2 + c * (p.h - rowH - 2) / 2 + ((p.h - rowH - 2) / 2 - mh) / 2;
-      g.font = FONT(8);
-      g.fillStyle = COL.dim;
-      g.fillText(String(c + 1), p.x, my + mh / 2);
+      drawTextPx(this.g, this.dpr, String(c + 1), p.x, my + mh / 2, 8, COL.dim);
       const bx = p.x + lab, bw = p.w - lab;
       g.fillStyle = "#1a1a1d";
       g.fillRect(bx, my, bw, mh);

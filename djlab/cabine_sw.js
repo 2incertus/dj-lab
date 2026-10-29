@@ -16,8 +16,8 @@
 // tests/test_cabine_sw.py prints: the test fails until both move, so an
 // installed phone always gets the new shell.
 
-const VERSION = 4;
-const SHELL_HASH = "4463882bd026680f";
+const VERSION = 5;
+const SHELL_HASH = "ef71029500ecc3f7";
 const CACHE = `cabine-v${VERSION}`;
 const SHELL = "/static/cabine/cabine.html";
 

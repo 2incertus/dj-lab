@@ -4,6 +4,11 @@ board control bound to the engine.
 Audio assertions run on Chromium (ruling R8: Playwright's WebKit on Linux is
 not a faithful Safari audio stack); WebKit checks the strip's layout. Tracks
 are carried into each page's own IndexedDB first, as on the phone.
+
+Layouts (Cabine v2): the strip and engine tests run on both the default
+"phone" layout (a slim 31 to 37 px waveform band, caixa at its left end, Beat
+FX and REC at its right end, the browse list over the mixer) and "spread"
+(the v1 band, the list inside it).
 """
 
 import math
@@ -16,6 +21,7 @@ from playwright.sync_api import expect
 pytestmark = pytest.mark.usefixtures("play_tracks")
 
 SHOTS = Path.home() / "cabine-shots" / "task10"
+V2_SHOTS = Path.home() / "cabine-shots" / "v2"
 IPHONE_INSETS = {"left": 59, "right": 47, "bottom": 21}
 
 
@@ -35,12 +41,14 @@ def _context(browser, engine, w=844, h=390, auth_cookie=None):
     return ctx
 
 
-def _open(ctx, base_url, carry=(), insets=None, layout="spread"):
+LAYOUTS = ["phone", "spread"]
+
+
+def _open(ctx, base_url, carry=(), insets=None, layout="phone"):
     """/cabine with `carry` on the phone (carried in that order, so the last
-    one is at the top of the list), then the board. Most of these tests are
-    about the engine and the waveform strip and use the "spread" layout (its
-    browse list opens in the band); the jog display tests (Task V2) and the
-    frame budget also run the default "phone" layout."""
+    one is at the top of the list), then the board. "phone" opens the board
+    with no layout asked for (the shipping default) and checks that it is the
+    phone layout; any other layout is asked for by name."""
     page = ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -53,9 +61,13 @@ def _open(ctx, base_url, carry=(), insets=None, layout="spread"):
         page.evaluate("""(i) => { const s = document.documentElement.style;
             s.setProperty('--cab-inset-left', i.left + 'px'); s.setProperty('--cab-inset-right', i.right + 'px');
             s.setProperty('--cab-inset-bottom', i.bottom + 'px'); }""", insets)
-    page.evaluate("(m) => window.cabine.showBoard({layout: m})", layout)
+    if layout == "phone":
+        page.evaluate("() => window.cabine.showBoard()")
+    else:
+        page.evaluate("(m) => window.cabine.showBoard({layout: m})", layout)
     page.wait_for_selector(".cab-board .cab-board-ctl", state="attached")
     page.wait_for_function("() => window.cabine.strip && window.cabine.strip.tracks.length >= 0")
+    assert page.evaluate("() => window.cabine.board.layoutMode") == layout
     page.errors = errors
     return page
 
@@ -160,9 +172,10 @@ def phone(chromium, base_url, auth_cookie):
 
 # ---- the ride ------------------------------------------------------------------------
 
-def test_two_tracks_mix_end_to_end(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_two_tracks_mix_end_to_end(layout, phone, base_url, play_tracks):
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     tap(page, r, "d1-play")
     tap(page, r, "d2-play")
@@ -206,9 +219,10 @@ def test_two_tracks_mix_end_to_end(phone, base_url, play_tracks):
     assert not page.errors, page.errors
 
 
-def test_strip_read_only(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_strip_read_only(layout, phone, base_url, play_tracks):
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     load_both(page, a, b)
     snap = """() => { const e = window.cabine.engine;
         return { decks: e.decks.map(d => ({ pos: d.posAt(), playing: d.state.playing, cue: d.state.cuePoint,
@@ -233,9 +247,10 @@ def test_strip_read_only(phone, base_url, play_tracks):
     assert not page.errors, page.errors
 
 
-def test_load_lock_on_playing_deck(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_load_lock_on_playing_deck(layout, phone, base_url, play_tracks):
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     tap(page, r, "d1-play")
     page.wait_for_function("() => window.cabine.engine.decks[0].state.playing")
@@ -254,9 +269,10 @@ def test_load_lock_on_playing_deck(phone, base_url, play_tracks):
     assert not page.errors, page.errors
 
 
-def test_swap_unloads_before_decode(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_swap_unloads_before_decode(layout, phone, base_url, play_tracks):
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     page.evaluate("""() => {
         window.__msgs = [];
@@ -278,9 +294,10 @@ def test_swap_unloads_before_decode(phone, base_url, play_tracks):
     assert not page.errors, page.errors
 
 
-def test_playhead_is_latency_compensated(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_playhead_is_latency_compensated(layout, phone, base_url, play_tracks):
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     tap(page, r, "d1-play")
     page.wait_for_function("() => window.cabine.engine.decks[0].state.playing")
@@ -462,32 +479,48 @@ def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
 
 # ---- layout and screenshots --------------------------------------------------------------
 
-@pytest.mark.parametrize("engine", ["chromium", "webkit"])
-def test_strip_layout_and_playing_screenshot(engine, chromium, webkit, base_url, auth_cookie, play_tracks):
+@pytest.mark.parametrize("engine,layout,w,h", [
+    ("chromium", "phone", 844, 390), ("webkit", "phone", 844, 390), ("webkit", "phone", 844, 330),
+    ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
+def test_strip_layout_and_playing_screenshot(engine, layout, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
+    """The band with two tracks loaded and playing: canvas, caixa at the left
+    end, REC (live) at the right end, the waveform lanes between; the browse
+    list in the band (spread) or over the mixer (phone)."""
     browser = chromium if engine == "chromium" else webkit
-    w, h = (844, 390)
     ctx = _context(browser, engine, w, h, auth_cookie)
     try:
         a, b = play_tracks["click128_130"], play_tracks["click131"]
-        page = _open(ctx, base_url, carry=(a, b), insets=IPHONE_INSETS if engine == "webkit" else None)
+        insets = (IPHONE_INSETS if layout == "spread" else {"left": 47, "right": 47, "bottom": 21}) if engine == "webkit" else None
+        page = _open(ctx, base_url, carry=(a, b), insets=insets, layout=layout)
         r = load_both(page, a, b)
         box = page.evaluate("""() => { const q = (s) => document.querySelector(s).getBoundingClientRect();
             const o = (r) => ({l: r.left, t: r.top, r: r.right, b: r.bottom});
             return { strip: o(q('.cab-board-strip')), canvas: o(q('.cab-strip-canvas')), rec: o(q('.cab-strip-rec')),
-                     caixa: o(q('.cab-board-caixa')), board: o(q('.cab-board')),
+                     caixa: o(q('.cab-board-caixa')), board: o(q('.cab-board')), mixer: o(q('.cab-board-sec-mixer')),
                      lanes: window.cabine.strip.L.lanes.map(l => l.wave), recDisabled: document.querySelector('.cab-strip-rec').disabled }; }""")
         s, c = box["strip"], box["canvas"]
         assert abs(c["l"] - s["l"]) < 1 and abs(c["r"] - s["r"]) < 1 and abs(c["b"] - s["b"]) < 1.5, box
         assert box["rec"]["r"] <= s["r"] + 0.5 and box["rec"]["b"] <= s["b"] + 0.5 and box["rec"]["t"] >= s["t"] - 0.5
         assert box["recDisabled"] is False, "REC is live (Task 11)"
+        assert box["caixa"]["t"] >= s["t"] - 0.5 and box["caixa"]["b"] <= s["b"] + 0.5, "caixa in the band"
         assert box["lanes"][0]["x"] + c["l"] >= box["caixa"]["r"], "the waveform starts right of caixa"
+        assert box["lanes"][0]["x"] + box["lanes"][0]["w"] + c["l"] <= box["rec"]["l"], "and ends left of REC"
         assert s["b"] <= box["board"]["t"] + 0.5, "the strip sits above the board"
-        # browse open: the list stays inside the strip
+        if layout == "phone":
+            band = s["b"] - s["t"]
+            assert 30 <= band <= 38, band
+            assert all(l["h"] >= band / 2 - 1.5 for l in box["lanes"]), box["lanes"]      # the slim band: lanes full height
         tap(page, r, "browse")
         lst = page.evaluate("() => { const r = document.querySelector('.cab-strip-browse').getBoundingClientRect(); return {l: r.left, t: r.top, r: r.right, b: r.bottom}; }")
-        assert lst["t"] >= s["t"] - 0.5 and lst["b"] <= s["b"] + 0.5 and lst["l"] >= box["caixa"]["r"], lst
-        SHOTS.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(SHOTS / f"browse-{engine}-{w}x{h}.png"))
+        if layout == "spread":
+            # browse open: the list stays inside the strip
+            assert lst["t"] >= s["t"] - 0.5 and lst["b"] <= s["b"] + 0.5 and lst["l"] >= box["caixa"]["r"], lst
+        else:
+            m = box["mixer"]
+            assert lst["l"] >= m["l"] - 0.5 and lst["r"] <= m["r"] + 0.5 and lst["t"] >= s["b"], (lst, m)
+        shots = V2_SHOTS if layout == "phone" else SHOTS
+        shots.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(shots / f"browse-{layout}-{engine}-{w}x{h}.png"))
         tap(page, r, "browse")
         expect(page.locator(".cab-strip-browse")).to_be_hidden()
         tap(page, r, "d1-play")
@@ -495,19 +528,20 @@ def test_strip_layout_and_playing_screenshot(engine, chromium, webkit, base_url,
         page.wait_for_function("() => window.cabine.engine.decks.every(d => d.state.playing)")
         tap(page, r, "d2-sync")
         page.wait_for_timeout(1500)
-        page.screenshot(path=str(SHOTS / f"playing-{engine}-{w}x{h}.png"))
-        page.screenshot(path=str(SHOTS / f"strip-{engine}-{w}x{h}.png"),
+        page.screenshot(path=str(shots / f"playing-{layout}-{engine}-{w}x{h}.png"))
+        page.screenshot(path=str(shots / f"strip-{layout}-{engine}-{w}x{h}.png"),
                         clip={"x": s["l"], "y": s["t"], "width": s["r"] - s["l"], "height": s["b"] - s["t"]})
         assert not page.errors, page.errors
     finally:
         ctx.close()
 
 
-def test_portrait_stands_the_strip_down(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_portrait_stands_the_strip_down(layout, phone, base_url, play_tracks):
     """Turned to portrait the strip draws nothing and keeps its layout and
     tiles; back in landscape it carries on without pre-rendering again."""
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     tap(page, r, "d1-play")
     tap(page, r, "d2-play")
@@ -538,7 +572,6 @@ def test_portrait_stands_the_strip_down(phone, base_url, play_tracks):
 
 # ---- the jog display (Cabine v2, Task V2) -------------------------------------------------
 
-V2_SHOTS = Path.home() / "cabine-shots" / "v2"
 PHONE_INSETS = {"left": 47, "right": 47, "bottom": 21}
 
 JOGS = """() => window.cabine.jogs.map((j, k) => {
