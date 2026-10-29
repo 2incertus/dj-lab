@@ -2,9 +2,9 @@
 // section 5, "Waveform strip").
 //
 // new Strip(canvas, {decks, store, ctx, mixer, fx, reserveLeft, watch})
-//   Two lanes, deck 1 on top. Each lane: a text row (artist - title | BPM
-//   with tempo applied | the analyzed key, never tempo-shifted | -mm:ss |
-//   SYNC, MASTER on the sync master) with a thin whole-track overview at its
+//   Two lanes, deck 1 on top. Each lane: a text row (artist - title | the
+//   analyzed key, never tempo-shifted; BPM, time and SYNC / MASTER are on the
+//   jog display, ui/jog-screen.js) with a thin whole-track overview at its
 //   right, and under it the scrolling waveform from the carried peaks
 //   (100 per second) with the playhead in the middle, beat ticks and bar lines
 //   from the grid, hot cue markers in the pad colours and the loop region
@@ -28,7 +28,7 @@
 // meters, app.js).
 //
 // Browse (BROWSE + LOAD): openBrowse() drops the carried-track list over the
-// lanes, browseMove(steps) moves the highlight, highlighted() is the file
+// lanes (or into opts.listHost: the phone board opens it over the mixer), browseMove(steps) moves the highlight, highlighted() is the file
 // LOAD loads, closeBrowse() hides it. The list also scrolls with a finger.
 
 import { beatIndexAt, timeOfBeat, barPhaseAt } from "../engine/grid.js";
@@ -92,16 +92,15 @@ export function formatTime(s) {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-/** The deck's text line as coloured segments [{text, dim?, on?}]. */
-export function deckLine({ meta, bpm, remaining, sync, master }) {
+/** The deck's text line as coloured segments [{text, dim?}]: the title and
+ *  the analyzed key. BPM, tempo, remaining time and SYNC / MASTER are on the
+ *  jog display (ui/jog-screen.js, Cabine v2 Task V2). */
+export function deckLine({ meta }) {
   const m = meta || {};
-  const segs = [
+  return [
     { text: m.title || m.file || "" },
-    { text: ` | ${bpm ? bpm.toFixed(2) : "---"} | ${m.key || "-"} | -${formatTime(remaining)}`, dim: true },
+    { text: ` | ${m.key || "-"}`, dim: true },
   ];
-  if (sync) segs.push({ text: " | ", dim: true }, { text: "SYNC", on: true });
-  if (master) segs.push({ text: " | ", dim: true }, { text: "MASTER", on: true });
-  return segs;
 }
 
 /** One meter step: the bar falls at METER_DECAY_DB_S, the peak holds
@@ -194,6 +193,8 @@ export class Strip {
     this.reserveLeft = opts.reserveLeft || (() => 0);
     /** Where REC lives when the board has no strip band (the panels layout). */
     this.recHost = opts.recHost || null;
+    /** Where the browse list opens when not over the lanes (phone: over the mixer). */
+    this.listHost = opts.listHost || null;
     this.decks = opts.decks || [];
     this.ctx = opts.ctx || null;
     this.mixer = opts.mixer || null;
@@ -216,7 +217,7 @@ export class Strip {
     this.list.className = "cab-strip-browse";
     this.list.hidden = true;
     this.list.innerHTML = `<ol class="cab-strip-list"></ol>`;
-    slot.appendChild(this.list);
+    (this.listHost || slot).appendChild(this.list);
     this.rec = document.createElement("button");
     this.rec.type = "button";
     this.rec.className = "cab-strip-rec";
@@ -385,7 +386,7 @@ export class Strip {
     this.canvas.style.width = `${W}px`;
     this.canvas.style.height = `${H}px`;
     const { list, rec } = this.L;
-    Object.assign(this.list.style, { left: `${list.x}px`, top: `${list.y}px`, width: `${list.w}px`, height: `${list.h}px` });
+    if (!this.listHost) Object.assign(this.list.style, { left: `${list.x}px`, top: `${list.y}px`, width: `${list.w}px`, height: `${list.h}px` });
     if (!this.recHost) Object.assign(this.rec.style, { left: `${rec.x}px`, top: `${rec.y}px`, width: `${rec.w}px`, height: `${rec.h}px` });
     this._prerender(0);
     this._prerender(1);
@@ -452,9 +453,12 @@ export class Strip {
     }
     const T = this.ctx ? playheadTime(this.ctx) : 0;
     const master = masterDeck(this.decks);
+    /** This frame's audio time and sync master (the jog displays draw with them). */
+    this.T = T;
+    this.master = master;
     const dt = this._lastMeterT === null ? 0 : (now - this._lastMeterT) / 1000;
     this._lastMeterT = now;
-    for (let i = 0; i < 2; i++) this._drawLane(i, T, now, master);
+    for (let i = 0; i < 2; i++) this._drawLane(i, T, now);
     this._drawPanel(now, dt);
     return true;
   }
@@ -470,7 +474,7 @@ export class Strip {
     return true;
   }
 
-  _drawLane(i, T, now, master) {
+  _drawLane(i, T, now) {
     const g = this.g;
     const lane = this.L.lanes[i];
     const Ln = this.lanes[i];
@@ -484,11 +488,9 @@ export class Strip {
     // text row + overview
     const flash = this.flashing(i, now);
     const st = d ? d.state : null;
-    const bpm = d ? d.effectiveBpm() : null;
-    const remaining = d ? dur - pos : 0;
     const textKey = flash ? `f${flash}` : !d ? `e${Ln.loading ? "l" : ""}`
-      : `${bpm && bpm.toFixed(2)}|${formatTime(remaining)}|${st.syncOn}|${master === d}|${(Ln.info && Ln.info.meta.title) || ""}`;
-    if (this._dirty(`t${i}`, textKey)) this._drawText(i, lane, d, flash, bpm, remaining, st, master);
+      : `${(Ln.info && Ln.info.meta.title) || ""}|${(Ln.info && Ln.info.meta.key) || ""}`;
+    if (this._dirty(`t${i}`, textKey)) this._drawText(i, lane, d, flash);
     const ox = Ln.over && dur > 0 ? Math.round((pos / dur) * lane.over.w * this.dpr) : -1;
     if (this._dirty(`o${i}`, `${ox}|${!!Ln.over}`)) this._drawOverview(lane, Ln, ox);
 
@@ -548,7 +550,7 @@ export class Strip {
     g.restore();
   }
 
-  _drawText(i, lane, d, flash, bpm, remaining, st, master) {
+  _drawText(i, lane, d, flash) {
     const g = this.g;
     const r = lane.text;
     g.save();
@@ -567,8 +569,7 @@ export class Strip {
     if (flash) put(flash, COL.flash);
     else if (!d) put(this.lanes[i].loading ? "loading" : "no track", COL.dim);
     else {
-      const segs = deckLine({ meta: this.lanes[i].info ? this.lanes[i].info.meta : d.track && d.track.meta,
-        bpm, remaining, sync: st.syncOn, master: master === d });
+      const segs = deckLine({ meta: this.lanes[i].info ? this.lanes[i].info.meta : d.track && d.track.meta });
       for (const s of segs) put(s.text, s.on ? COL.on : s.dim ? COL.dim : COL.text);
     }
     g.restore();

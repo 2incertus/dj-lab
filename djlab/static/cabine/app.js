@@ -14,7 +14,8 @@
 // starts audio only from a gesture), then the two deck worklets, the mixer,
 // Beat FX and the sampler. Actions from that first touch wait for it
 // (ui/bindings.js). One requestAnimationFrame loop drives the strip (at most
-// 30 fps), the board's lights and its meters.
+// 30 fps), the two jog displays (ui/jog-screen.js, on the strip's frames, so
+// also at most 30 fps), the board's lights and its meters.
 //
 // Task 11, the phone shell:
 // - The service worker (/cabine/sw.js, scope /cabine) caches the shell, so
@@ -46,6 +47,7 @@ import { renderBoard } from "./ui/board.js";
 import { makeDemoBindings } from "./ui/board-demo-bindings.js";
 import { makeBindings } from "./ui/bindings.js";
 import { Strip } from "./ui/strip.js";
+import { JogScreen } from "./ui/jog-screen.js";
 import { createRig } from "./engine/rig.js";
 import { workletLoads } from "./engine/deck-voice.js";
 import { loadTrack } from "./engine/loader.js";
@@ -68,6 +70,7 @@ const app = {
   crate: null,
   board: null,
   strip: null,
+  jogs: [],
   engine: null,
   bind: null,
   recorder: null,
@@ -94,6 +97,8 @@ let meterShown = [-1, -1];
 function leave() {
   if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
   if (app.strip) { app.strip.destroy(); app.strip = null; }
+  for (const j of app.jogs) j.destroy();
+  app.jogs = [];
   if (app.crate) { app.crate.destroy(); app.crate = null; }
   if (app.board) { app.board.destroy(); app.board = null; }
 }
@@ -335,6 +340,12 @@ function tick(now) {
   const rec = app.recorder;
   strip.setRec(!!rec && rec.state === "recording", rec ? rec.elapsed() : 0);
   if (!strip.frame(now)) return;
+  // the jog displays: same 30 fps gate, same latency-compensated time as the strip
+  const decks = app.engine ? app.engine.decks : [];
+  app.jogs.forEach((j, k) => {
+    const d = decks[k];
+    j.frame(d && d.state.loaded ? d : null, strip.master, strip.T);
+  });
   if (!app.engine || !app.board) return;
   app.bind.refreshLights();
   for (let c = 0; c < 2; c++) {
@@ -375,7 +386,8 @@ function showBoard(opts = {}) {
   // the caixa button sits on the strip band, or (panels) in the left panel slot
   app.strip = new Strip(canvas, { store: app.store,
     reserveLeft: () => (caixa && caixa.closest(".cab-board-strip") ? caixa.offsetWidth + 8 : 0),
-    watch: caixa ? [caixa] : [], recHost: app.board.recHost });
+    watch: caixa ? [caixa] : [], recHost: app.board.recHost, listHost: app.board.browseHost });
+  app.jogs = app.board.jogCanvases().filter(Boolean).map((c) => new JogScreen(c));
   if (app.engine) {
     app.strip.setEngine(app.engine);
     app.engine.decks.forEach((d, i) => { if (d.state.loaded && d.track) app.strip.setTrack(i, d.track); });

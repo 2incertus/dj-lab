@@ -712,7 +712,8 @@ def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, aut
 @pytest.mark.parametrize("name", ["iphone-safari-webkit", "galaxy-chromium"])
 def test_phone_band_keeps_caixa_rec_and_browse(name, chromium, webkit, base_url, auth_cookie):
     """The real board in the phone layout: the waveform band on top with caixa
-    at its left end and REC at its right end; BROWSE opens the list in the band."""
+    at its left end and REC at its right end; BROWSE opens the list over the
+    mixer, under BROWSE and LOAD (Task V2: the band is two list rows tall)."""
     spec = PHONES[name]
     browser = chromium if spec["engine"] == "chromium" else webkit
     ctx = _context(browser, spec["engine"], spec["w"], spec["h"], auth_cookie)
@@ -741,7 +742,9 @@ def test_phone_band_keeps_caixa_rec_and_browse(name, chromium, webkit, base_url,
         page.touchscreen.tap(b["cx"], b["cy"])
         page.wait_for_function("() => window.cabine.strip.isBrowseOpen", timeout=20_000)
         lst = page.locator(".cab-strip-browse").bounding_box()
-        assert band["y"] - 0.5 <= lst["y"] and lst["y"] + lst["height"] <= band["y"] + band["height"] + 0.5, (lst, band)
+        mixer = page.locator(".cab-board-sec-mixer").bounding_box()
+        assert mixer["x"] - 0.5 <= lst["x"] and lst["x"] + lst["width"] <= mixer["x"] + mixer["width"] + 0.5, (lst, mixer)
+        assert lst["y"] >= g["drawn"]["browse"]["b"] - 0.5 and lst["y"] + lst["height"] <= mixer["y"] + mixer["height"] + 0.5, lst
         SHOTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(SHOTS / f"phone-browse-{name}-{spec['w']}x{spec['h']}.png"))
         page.touchscreen.tap(b["cx"], b["cy"])

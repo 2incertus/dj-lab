@@ -37,18 +37,16 @@ test("time_formats_as_minutes_and_seconds", () => {
   assert.equal(formatTime(Infinity), "--:--");
 });
 
-test("deck_line_shows_effective_bpm_analyzed_key_remaining_and_sync", () => {
+test("deck_line_is_title_and_key_the_jog_display_has_the_numbers", () => {
+  // BPM, time, SYNC / MASTER moved to the jog display (ui/jog-screen.js, Task V2)
   const meta = { title: "Rene Wise - Rough Rider", key: "A min", bpm: 128 };
   const segs = deckLine({ meta, bpm: 131.234, remaining: 201.2, sync: true, master: false });
   const text = segs.map((s) => s.text).join("");
-  assert.equal(text, "Rene Wise - Rough Rider | 131.23 | A min | -3:21 | SYNC");
-  assert.ok(segs.find((s) => s.text === "SYNC").on, "SYNC drawn lit");
-  const m = deckLine({ meta, bpm: 128, remaining: 10, sync: false, master: true }).map((s) => s.text).join("");
-  assert.equal(m, "Rene Wise - Rough Rider | 128.00 | A min | -0:10 | MASTER");
-  const bare = deckLine({ meta: { file: "x.wav" }, bpm: null, remaining: 5, sync: false, master: false })
-    .map((s) => s.text).join("");
-  assert.equal(bare, "x.wav | --- | - | -0:05");
-  assert.ok(!/—/.test(text + m + bare), "no em dashes in copy");
+  assert.equal(text, "Rene Wise - Rough Rider | A min");
+  assert.ok(segs[1].dim, "the key drawn dim");
+  const bare = deckLine({ meta: { file: "x.wav" } }).map((s) => s.text).join("");
+  assert.equal(bare, "x.wav | -");
+  assert.ok(!/—/.test(text + bare), "no em dashes in copy");
 });
 
 test("meter_holds_the_peak_for_1_5_s_then_decays_20_db_per_s", () => {

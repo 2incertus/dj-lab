@@ -6,6 +6,8 @@ not a faithful Safari audio stack); WebKit checks the strip's layout. Tracks
 are carried into each page's own IndexedDB first, as on the phone.
 """
 
+import math
+import re
 from pathlib import Path
 
 import pytest
@@ -35,10 +37,10 @@ def _context(browser, engine, w=844, h=390, auth_cookie=None):
 
 def _open(ctx, base_url, carry=(), insets=None, layout="spread"):
     """/cabine with `carry` on the phone (carried in that order, so the last
-    one is at the top of the list), then the board. These tests are about the
-    engine and the waveform strip, which only has its band in the "spread"
-    layout (Cabine v2 Task V2 replaces it with the deck panels); the default
-    "panels" layout plays the real app in test_offline.py and test_board.py."""
+    one is at the top of the list), then the board. Most of these tests are
+    about the engine and the waveform strip and use the "spread" layout (its
+    browse list opens in the band); the jog display tests (Task V2) and the
+    frame budget also run the default "phone" layout."""
     page = ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -302,9 +304,11 @@ def test_playhead_is_latency_compensated(phone, base_url, play_tracks):
     assert not page.errors, page.errors
 
 
-def test_ui_frame_budget(phone, base_url, play_tracks):
+@pytest.mark.parametrize("layout", ["spread", "phone"])
+def test_ui_frame_budget(layout, phone, base_url, play_tracks):
+    """Strip, lights, meters and (Task V2) the two jog displays, at 4x CPU throttle."""
     a, b = play_tracks["tone_a"], play_tracks["tone_b"]
-    page = _open(phone, base_url, carry=(a, b))
+    page = _open(phone, base_url, carry=(a, b), layout=layout)
     r = load_both(page, a, b)
     tap(page, r, "d1-play")
     tap(page, r, "d2-play")
@@ -314,6 +318,7 @@ def test_ui_frame_budget(phone, base_url, play_tracks):
     try:
         res = page.evaluate("""async () => {
             const u0 = window.cabine.engine.underruns();
+            const j0 = window.cabine.jogs.map(j => j.stats.draws), s0 = window.cabine.strip.stats.frames;
             const d = [];
             let last = null;
             await new Promise((done) => {
@@ -325,12 +330,16 @@ def test_ui_frame_budget(phone, base_url, play_tracks):
             d.sort((x, y) => x - y);
             return { n: d.length, median: d[Math.floor(d.length / 2)], p90: d[Math.floor(d.length * 0.9)],
                      max: d[d.length - 1], underruns: window.cabine.engine.underruns() - u0,
+                     stripFrames: window.cabine.strip.stats.frames - s0,
+                     jogDraws: window.cabine.jogs.map((j, k) => j.stats.draws - j0[k]),
                      playing: window.cabine.engine.decks.map(x => x.state.playing) };
         }""")
     finally:
         cdp.send("Emulation.setCPUThrottlingRate", {"rate": 1})
-    print(f"\nframe budget (4x CPU throttle): {res}")
+    print(f"\nframe budget (4x CPU throttle, {layout}): {res}")
     assert res["playing"] == [True, True]
+    assert all(n > 5 for n in res["jogDraws"]), "the jog displays draw while playing"
+    assert all(n <= res["stripFrames"] for n in res["jogDraws"]), "never more often than the strip (30 fps)"
     assert res["median"] < 33, res
     assert res["underruns"] == 0, res
     assert not page.errors, page.errors
@@ -504,7 +513,7 @@ def test_portrait_stands_the_strip_down(phone, base_url, play_tracks):
     tap(page, r, "d2-play")
     page.evaluate("() => document.fonts.ready")
     page.wait_for_timeout(400)
-    stats = "() => ({ ...window.cabine.strip.stats, lights: window.cabine.bind.lightsRuns })"
+    stats = "() => ({ ...window.cabine.strip.stats, lights: window.cabine.bind.lightsRuns, jogs: window.cabine.jogs.map(j => j.stats.frames) })"
     s0 = page.evaluate(stats)
     assert s0["prerenders"] >= 2 and s0["frames"] > 0, s0
     page.set_viewport_size({"width": 390, "height": 844})
@@ -515,11 +524,163 @@ def test_portrait_stands_the_strip_down(phone, base_url, play_tracks):
     s2 = page.evaluate(stats)
     assert s2["frames"] == s1["frames"], f"drawing while hidden: {s1} -> {s2}"
     assert s2["lights"] == s1["lights"], f"lights refreshed while hidden: {s1} -> {s2}"
+    assert s2["jogs"] == s1["jogs"], f"jog displays drawn while hidden: {s1} -> {s2}"
     assert s2["prerenders"] == s0["prerenders"], f"re-rendered for the hidden strip: {s0} -> {s2}"
     page.set_viewport_size({"width": 844, "height": 390})
     page.wait_for_timeout(600)
     s3 = page.evaluate(stats)
     assert s3["prerenders"] == s0["prerenders"], f"re-rendered on the way back: {s0} -> {s3}"
     assert s3["frames"] > s2["frames"], "drawing again in landscape"
+    assert all(b > a for a, b in zip(s2["jogs"], s3["jogs"])), "the jog displays too"
     assert page.evaluate("() => window.cabine.engine.decks.every(d => d.state.playing)")
     assert not page.errors, page.errors
+
+
+# ---- the jog display (Cabine v2, Task V2) -------------------------------------------------
+
+V2_SHOTS = Path.home() / "cabine-shots" / "v2"
+PHONE_INSETS = {"left": 47, "right": 47, "bottom": 21}
+
+JOGS = """() => window.cabine.jogs.map((j, k) => {
+    const c = j.canvas, r = c.getBoundingClientRect();
+    const jog = document.querySelector(`[data-id='d${k + 1}-jog']`).getBoundingClientRect();
+    return { last: j.last, shown: [...j.plan.shown], D: j.plan.D, r: j.plan.r, draws: j.stats.draws,
+             box: {l: r.left, t: r.top, w: r.width, h: r.height}, jog: {l: jog.left, t: jog.top, w: jog.width, h: jog.height},
+             pe: getComputedStyle(c).pointerEvents };
+})"""
+
+
+def bright_pixels(page, j):
+    """Bright pixels in the screen's middle band (the BPM and time rows), from
+    a real screenshot (WebKit's getImageData is not a reliable witness)."""
+    from io import BytesIO
+    from PIL import Image
+    cx, cy, r = j["box"]["l"] + j["box"]["w"] / 2, j["box"]["t"] + j["box"]["h"] / 2, j["r"]
+    png = page.screenshot(clip={"x": cx - 0.8 * r, "y": cy - 0.5 * r, "width": 1.6 * r, "height": 1.0 * r})
+    data = Image.open(BytesIO(png)).convert("RGB").tobytes()
+    return sum(1 for i in range(0, len(data), 3) if data[i] + data[i + 1] + data[i + 2] > 600)
+
+
+@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("chromium", 844, 390)])
+def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
+    """Two tracks playing, deck 2 synced to deck 1: both jog displays show the
+    BPM, the remaining time and the key, SYNC / MASTER and the phase meter."""
+    browser = chromium if engine == "chromium" else webkit
+    ctx = _context(browser, engine, w, h, auth_cookie)
+    try:
+        a, b = play_tracks["click128_130"], play_tracks["click131"]
+        page = _open(ctx, base_url, carry=(a, b), insets=PHONE_INSETS if engine == "webkit" else None, layout="phone")
+        r = load_both(page, a, b)
+        tap(page, r, "d1-play")
+        tap(page, r, "d2-play")
+        page.wait_for_function("() => window.cabine.engine.decks.every(d => d.state.playing)")
+        tap(page, r, "d2-sync")
+        page.wait_for_function("() => window.cabine.engine.decks[1].state.syncOn")
+        page.evaluate("() => document.fonts.ready")
+        page.wait_for_timeout(1500)
+        js = page.evaluate(JOGS)
+        print(f"\njog displays {engine} {w}x{h}: " + " / ".join(
+            f"D={j['D']} shown={j['shown']} last={j['last']}" for j in js))
+        V2_SHOTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(V2_SHOTS / f"jog-playing-synced-{engine}-{w}x{h}.png"))
+        for k, j in enumerate(js):
+            jb = j["jog"]
+            page.screenshot(path=str(V2_SHOTS / f"jog{k + 1}-{engine}-{w}x{h}.png"),
+                            clip={"x": jb["l"] - 4, "y": jb["t"] - 4, "width": jb["w"] + 8, "height": jb["h"] + 8})
+        assert len(js) == 2
+        for k, j in enumerate(js):
+            assert j["pe"] == "none", "the display never takes a touch"
+            assert abs(j["box"]["w"] - j["jog"]["w"]) < 0.6 and abs(j["box"]["l"] - j["jog"]["l"]) < 0.6, j
+            for item in ("bpm", "time", "phase", "tempo", "tag", "key"):
+                assert item in j["shown"], f"deck {k + 1}: {item} at {j['D']} px"
+            last = j["last"]
+            assert last["bpm"] == "128.00", last                  # deck 2 follows deck 1's 128
+            assert re.fullmatch(r"-\d+:\d\d", last["time"]), last
+            assert last["key"] == "Am", last
+            lit = bright_pixels(page, j)
+            assert lit > 200, f"deck {k + 1}: the BPM and time are drawn ({lit} bright pixels)"
+            assert sum(c in ("own", "both") for c in last["phase"]["cells"]) == 1, last
+        assert js[0]["last"]["tag"] == "MASTER" and js[1]["last"]["tag"] == "SYNC"
+        assert js[0]["last"]["tempo"] == "0.0%" and js[1]["last"]["tempo"] == "-2.3%", (js[0]["last"], js[1]["last"])
+        assert "ref" not in js[1]["last"]["phase"]["cells"], "synced and phase aligned: one cell, the same beat"
+        assert js[1]["last"]["phase"]["aligned"] is True, js[1]["last"]
+        # the last 30 s: the ring and the time turn red; a 4-beat loop shows its length
+        page.evaluate("() => { const d = window.cabine.engine.decks[0]; d._seekNow(d.duration - 20, d.now()); }")
+        tap(page, r, "d1-4beat")
+        page.wait_for_function("() => window.cabine.engine.decks[0].state.loop.active")
+        page.wait_for_timeout(800)
+        j1 = page.evaluate(JOGS)[0]
+        print(f"near the end, looping: {j1['last']}")
+        assert j1["last"]["red"] is True and j1["last"]["loop"] == "4", j1["last"]
+        assert re.fullmatch(r"-0:[12]\d", j1["last"]["time"]), j1["last"]
+        jb = j1["jog"]
+        page.screenshot(path=str(V2_SHOTS / f"jog1-last30s-loop-{engine}-{w}x{h}.png"),
+                        clip={"x": jb["l"] - 4, "y": jb["t"] - 4, "width": jb["w"] + 8, "height": jb["h"] + 8})
+        assert not page.errors, page.errors
+    finally:
+        ctx.close()
+
+
+def test_jog_display_keeps_the_jog_touches(phone, base_url, play_tracks):
+    """A touch on the display (the jog's centre) is the jog's: it scrubs."""
+    a, b = play_tracks["tone_a"], play_tracks["tone_b"]
+    page = _open(phone, base_url, carry=(a, b), layout="phone")
+    r = load_both(page, a, b)
+    j = r["d1-jog"]
+    cx, cy, R = j["cx"], j["cy"], j["w"] / 2
+    hit = page.evaluate("([x, y]) => { const e = document.elementFromPoint(x, y); return e && e.dataset.id; }",
+                        [cx + 0.4 * R, cy])
+    assert hit == "d1-jog", f"the jog's element takes a touch on its display, not {hit}"
+    page.wait_for_timeout(300)
+    pos0 = page.evaluate("() => window.cabine.engine.decks[0].posAt()")
+    n0 = len(page.evaluate("() => window.cabine.boardLog"))
+    # a half turn on the top plate, inside the display (0.4 R from the centre)
+    page.mouse.move(cx + 0.4 * R, cy)
+    page.mouse.down()
+    for k in range(1, 19):
+        a_ = math.radians(10 * k)
+        page.mouse.move(cx + 0.4 * R * math.cos(a_), cy + 0.4 * R * math.sin(a_))
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    log = page.evaluate("() => window.cabine.boardLog")[n0:]
+    acts = [e["action"] for e in log if e.get("deck") == 1]
+    assert "deck.jogTouch" in acts and "deck.jogTurn" in acts, acts
+    pos1 = page.evaluate("() => window.cabine.engine.decks[0].posAt()")
+    print(f"\nscrub on the display: {pos0:.3f} -> {pos1:.3f} s")
+    assert pos1 - pos0 > 0.5, "a clockwise half turn moved the paused deck forward (0.9 s a half turn)"
+    assert not page.errors, page.errors
+
+
+@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 330), ("chromium", 844, 390)])
+def test_phone_browse_opens_over_the_mixer(engine, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
+    """phone: BROWSE opens the list over the mixer, under BROWSE and LOAD, so
+    more than two tracks show at 844 x 330 and LOAD stays reachable."""
+    browser = chromium if engine == "chromium" else webkit
+    ctx = _context(browser, engine, w, h, auth_cookie)
+    try:
+        a, b = play_tracks["tone_a"], play_tracks["tone_b"]
+        page = _open(ctx, base_url, carry=(play_tracks["click128"], play_tracks["click120"], a, b),
+                     insets=PHONE_INSETS if engine == "webkit" else None, layout="phone")
+        r = rects(page)
+        tap(page, r, "browse")
+        page.wait_for_function("() => window.cabine.strip.isBrowseOpen")
+        lst = page.locator(".cab-strip-browse").bounding_box()
+        mixer = page.locator(".cab-board-sec-mixer").bounding_box()
+        rows = page.evaluate("() => { const l = document.querySelector('.cab-strip-browse').getBoundingClientRect();"
+                             " return [...document.querySelectorAll('.cab-strip-row')].filter(e => {"
+                             " const r = e.getBoundingClientRect(); return r.top >= l.top - 0.5 && r.bottom <= l.bottom + 0.5; }).length; }")
+        print(f"\nbrowse list {engine} {w}x{h}: {lst}, {rows} rows in view")
+        assert lst["x"] >= mixer["x"] - 0.5 and lst["x"] + lst["width"] <= mixer["x"] + mixer["width"] + 0.5, (lst, mixer)
+        for cid in ("browse", "load1", "load2"):
+            assert r[cid]["b"] <= lst["y"] + 0.5, f"{cid} stays uncovered"
+        assert rows >= 4, rows
+        V2_SHOTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(V2_SHOTS / f"phone-browse-mixer-{engine}-{w}x{h}.png"))
+        assert page.evaluate("() => window.cabine.strip.highlighted()") == b
+        tap(page, r, "load1")
+        wait_loaded(page, 0, b)
+        assert page.evaluate("() => window.cabine.strip.isBrowseOpen") is False
+        expect(page.locator(".cab-strip-browse")).to_be_hidden()
+        assert not page.errors, page.errors
+    finally:
+        ctx.close()

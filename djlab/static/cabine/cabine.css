@@ -299,6 +299,21 @@ html, body, .cab-root { touch-action: manipulation; }
   left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; border: 0;
 }
 
+/* phone: the browse list opens over the mixer, under its BROWSE / LOAD row */
+.cab-board-browsehost { position: absolute; display: none; z-index: 6; pointer-events: none; }
+.cab-board-screen[data-mode="phone"] .cab-board-browsehost:has(.cab-strip-browse:not([hidden])) { display: block; }
+.cab-board-screen.cab-portrait .cab-board-browsehost { display: none !important; }
+.cab-board-browsehost .cab-strip-browse {
+  left: 0; top: 0; width: 100%; height: 100%; pointer-events: auto; overflow: hidden;
+  border: 1px solid #3a3a3f; border-radius: 8px; box-shadow: 0 6px 24px #000c; background: #0b0b0d;
+}
+.cab-board-browsehost .cab-strip-row, .cab-board-browsehost .cab-strip-empty {
+  height: 18px; line-height: 18px; font-size: 11px; gap: 6px; padding: 0 5px;
+}
+.cab-board-browsehost .cab-strip-empty { white-space: normal; height: auto; line-height: 1.35; padding: 6px; }
+/* the list is a mixer wide: title, BPM and key (the length is in the caixa) */
+.cab-board-browsehost .cab-strip-m:last-child { display: none; }
+
 /* the strip's contents (Task 10, ui/strip.js): canvas, browse list, REC */
 .cab-board-strip .cab-board-strip-slot { position: relative; overflow: hidden; border-radius: 0 0 8px 8px; }
 .cab-strip-canvas { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
@@ -520,14 +535,17 @@ html, body, .cab-root { touch-action: manipulation; }
   box-shadow: 0 0 0 1px #0c0c0c, inset 0 0 0 calc(var(--u) * 0.3) #4a4a4c;
   transform: rotate(var(--spin, 0deg));
 }
+/* the indicator line sits between the jog display's edge (0.66 R) and the plate's (0.80 R) */
 .cab-board-plate i {
-  position: absolute; left: 50%; top: 4%; width: max(1.5px, calc(var(--u) * 0.45)); height: 12%;
+  position: absolute; left: 50%; top: 2%; width: max(1.5px, calc(var(--u) * 0.45)); height: 12%;
   transform: translateX(-50%); background: #b9b9bb; border-radius: 1px;
 }
 .cab-board-hub {
   position: absolute; inset: 30.3%; border-radius: 50%; background: #18181a;
   box-shadow: inset 0 0 0 calc(var(--u) * 0.7) #8e8e90, inset 0 0 0 calc(var(--u) * 1.1) #2b2b2d;
 }
+/* the jog display (ui/jog-screen.js): the screen, the position ring; drawn only */
+.cab-jog-screen { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
 .cab-bk-jog[data-zone="plate"] .cab-board-plate { box-shadow: 0 0 0 1px #0c0c0c, inset 0 0 0 calc(var(--u) * 0.4) #c9c9cb; }
 .cab-bk-jog[data-zone="ring"] .cab-board-ring { filter: brightness(1.3); }
 

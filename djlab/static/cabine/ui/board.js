@@ -26,7 +26,11 @@
 //
 // "phone" (default): the strip is a slim band on top (caixa at its left end,
 // Beat FX and REC at its right end), the decks re-proportioned for a phone
-// (board-layout.js phoneDeck), the mixer as on the panel.
+// (board-layout.js phoneDeck), the mixer as on the panel. The browse list
+// opens over the mixer under its BROWSE / LOAD row (browseHost).
+//
+// Every jog carries its jog display canvas (jogCanvases(), drawn by
+// ui/jog-screen.js from app.js's frame loop), pointer-events: none.
 // "panels": the two gaps beside the mixer are panelSlots() (screen CSS px);
 // panels() gives their two elements (Task V2 draws the deck panels in them).
 // Until then the left one holds the caixa button and the right one REC
@@ -128,7 +132,9 @@ function controlHtml(c) {
       break;
     }
     case "jog":
-      inner = `<span class="cab-board-ring"></span><span class="cab-board-plate"><i></i></span><span class="cab-board-hub"></span>`;
+      // the jog display (ui/jog-screen.js) on top: pointer-events none, the jog keeps every touch
+      inner = `<span class="cab-board-ring"></span><span class="cab-board-plate"><i></i></span><span class="cab-board-hub"></span>`
+        + `<canvas class="cab-jog-screen" aria-hidden="true"></canvas>`;
       break;
     case "lever":
       inner = `<span class="cab-board-slot"><i></i></span>`;
@@ -191,6 +197,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         ${sectionsHtml(controls)}
         <div class="cab-board-toast" role="status" aria-live="polite" hidden></div>
       </div>
+      <div class="cab-board-browsehost"></div>
       <div class="cab-board-panel" data-panel="1"></div>
       <div class="cab-board-panel" data-panel="2"><div class="cab-board-rechost"></div></div>
       <div class="cab-turn">
@@ -208,6 +215,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   const panelEls = [...screen.querySelectorAll(".cab-board-panel")];
   const caixa = screen.querySelector(".cab-board-caixa");
   const recHost = screen.querySelector(".cab-board-rechost");
+  const browseHost = screen.querySelector(".cab-board-browsehost");
   const byId = new Map(controls.map((c) => [c.id, c]));
   const els = new Map([...board.querySelectorAll("[data-id]")].map((el) => [el.dataset.id, el]));
   const widgets = new Map();
@@ -389,7 +397,8 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   for (const el of board.querySelectorAll("[data-legend]")) legendEls.set(`legend:${el.dataset.legend}`, el);
 
   function placeLegends(f, drawn) {
-    for (const l of legendPlan(f, drawn, controls)) {
+    const plan = legendPlan(f, drawn, controls);
+    for (const l of plan) {
       const el = legendEls.get(l.key);
       if (!el) continue;
       el.hidden = !!l.hidden;                     // a SHIFT legend v1 has no layer for, and no room
@@ -420,6 +429,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       const html = icon + esc(l.text);
       if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
     }
+    return plan;
   }
 
   function layout() {
@@ -463,7 +473,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         if (w && w.setCap) w.setCap({ w: cap.w / d.w, h: cap.h / d.h });
       }
     }
-    placeLegends(f, drawn);
+    const legends = placeLegends(f, drawn);
     const slots = panelSlots(f);
     geo = { fit: f, drawn, map: hitMap(f, drawn, controls), slots, key };
     if (mode === "panels") {
@@ -477,6 +487,18 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         top: `${f.top}px`, height: `${Math.round(f.height * 0.55)}px`,
       });
     } else {
+      if (mode === "phone") {
+        // the browse list opens over the mixer, under the BROWSE / LOAD row (the
+        // band is two list rows tall on a phone); BROWSE and LOAD stay uncovered
+        const mix = f.sections.find((x) => x.key === "mixer");
+        const ids = ["browse", "load1", "load2"];
+        const top = Math.max(...ids.map((id) => drawn.get(id)).filter(Boolean).map((d) => d.y + d.h),
+          ...legends.filter((l) => !l.hidden && ids.includes(l.owner)).map((l) => l.y + l.h)) + 3;
+        Object.assign(browseHost.style, {
+          left: `${f.left + mix.left}px`, top: `${f.top + top}px`, width: `${mix.width}px`,
+          height: `${f.height - top}px`,
+        });
+      }
       Object.assign(strip.style, {
         left: `${f.safe.left}px`, right: `${f.safe.right}px`, width: "auto", top: `${f.stripTop}px`,
         height: `${f.stripBottom - f.stripTop}px`,
@@ -538,6 +560,10 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     stripSlot: strip.querySelector(".cab-board-strip-slot"),
     /** panels: where REC goes (top of the right panel slot); null in the strip layouts. */
     recHost: mode === "panels" ? recHost : null,
+    /** phone: where the strip's browse list opens (over the mixer); null in the other layouts. */
+    browseHost: mode === "phone" ? browseHost : null,
+    /** The two jog display canvases, deck 1 then deck 2 (ui/jog-screen.js draws them). */
+    jogCanvases: () => [1, 2].map((n) => els.get(`d${n}-jog`)?.querySelector(".cab-jog-screen") || null),
     /** The two panel slots, screen CSS px [{x, y, w, h}, ...] (empty gaps outside "panels"). */
     panelSlots: () => (geo ? geo.slots.map((r) => ({ ...r })) : []),
     /** The two panel slot elements (Task V2 draws the deck panels in them). */
