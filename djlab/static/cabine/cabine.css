@@ -269,9 +269,18 @@ html, body, .cab-root { touch-action: manipulation; }
 .cab-board-panel { position: absolute; display: none; pointer-events: none; }
 .cab-board-panel > * { pointer-events: auto; }
 /* panels: the gaps are not panel; the mixer gets its own plate */
-.cab-board[data-layout="panels"] { background: transparent; box-shadow: none; }
-.cab-board[data-layout="panels"] .cab-board-sec { box-shadow: 0 0 0 1px #000, 0 calc(var(--u) * 0.8) calc(var(--u) * 3) #000a; }
-.cab-board[data-layout="panels"] .cab-board-sec-mixer { background: #2a2a2b; border-radius: calc(var(--u) * 1.2); }
+.cab-board[data-layout="panels"], .cab-board[data-layout="phone"] { background: transparent; box-shadow: none; }
+.cab-board[data-layout="panels"] .cab-board-sec, .cab-board[data-layout="phone"] .cab-board-sec {
+  box-shadow: 0 0 0 1px #000, 0 calc(var(--u) * 0.8) calc(var(--u) * 3) #000a;
+}
+.cab-board[data-layout="panels"] .cab-board-sec-mixer, .cab-board[data-layout="phone"] .cab-board-sec-mixer {
+  background: #2a2a2b; border-radius: calc(var(--u) * 1.2);
+}
+.cab-board[data-layout="phone"] .cab-board-sec-deck1, .cab-board[data-layout="phone"] .cab-board-sec-deck2 {
+  border-radius: calc(var(--u) * 1.2);
+}
+/* phone: caixa sits in the middle of the slim waveform band */
+.cab-board-screen[data-mode="phone"] .cab-board-caixa { top: 50%; transform: translateY(-50%); }
 .cab-board-screen[data-mode="panels"] .cab-board-panel { display: block; }
 .cab-board-screen.cab-portrait .cab-board-panel { display: none; }
 .cab-board-screen[data-mode="panels"] .cab-board-caixa {

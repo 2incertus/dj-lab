@@ -39,9 +39,8 @@ function geometry(vp, mode = "panels") {
   return { fit, drawn, map };
 }
 
-test("panels_is_the_default_and_spans_the_height", () => {
-  assert.equal(LAYOUT, "panels");
-  assert.deepEqual([...LAYOUTS].sort(), ["exact", "panels", "spread"]);
+test("panels_spans_the_height", () => {
+  assert.deepEqual([...LAYOUTS].sort(), ["exact", "panels", "phone", "spread"]);
   for (const vp of VIEWPORTS) {
     const { fit } = geometry(vp);
     const L = Math.max(vp.insets.left || 0, SAFE_FALLBACK.side), R = Math.max(vp.insets.right || 0, SAFE_FALLBACK.side);
@@ -254,15 +253,18 @@ test("legends_fit_at_six_px_or_more", () => {
   assert.ok(f.px >= 6 && f.fits && f.text !== "MEMORY" && textWidth(f.text, f.px) <= 21 + EPS, JSON.stringify(f));
   assert.equal(fitText("IN", 40, { base: 7 }).px, 7, "never above the base size");
   for (const vp of VIEWPORTS) {
-    for (const mode of ["panels"]) {
+    for (const mode of ["panels", "phone"]) {
       const { fit, drawn } = geometry(vp, mode);
       const plan = legendPlan(fit, drawn);
       assert.ok(plan.length > 100, `${plan.length} legends`);
       for (const l of plan) {
         if (l.hidden) {
+          // a stacked line printed on its neighbour's line (CUE/LOOP CALL) is not lost
+          if (l.joined) { assert.ok(plan.some((m) => m.key === l.joined && m.text.includes(l.text)), l.key); continue; }
           // only a SHIFT legend for a layer v1 does not have may be left off
           const c = byId.get(l.owner);
-          assert.ok(l.part === "sub" && c && (!c.shift || c.shift === "board.notYet"), `${mode} ${vp.tag}: ${l.key} hidden`);
+          // (or PLAY/PAUSE, the name printed under PLAY, which its face already shows)
+          assert.ok(l.part === "sub" && c && (c.subPlain || !c.shift || c.shift === "board.notYet"), `${mode} ${vp.tag}: ${l.key} hidden`);
           continue;
         }
         assert.ok(l.px >= LEGEND_MIN_PX - EPS, `${mode} ${vp.tag}: ${l.key} "${l.text}" at ${l.px.toFixed(2)} px`);
@@ -271,6 +273,100 @@ test("legends_fit_at_six_px_or_more", () => {
       // every free legend and indicator is accounted for
       assert.equal(plan.filter((l) => l.key.startsWith("legend:")).length, LEGENDS.length);
       assert.ok(INDICATORS.length === 2);
+    }
+  }
+});
+
+// ---- the "phone" layout (Task V1b) ---------------------------------------------------
+
+const deckIds = (n) => CONTROLS.filter((c) => c.section === "deck" && c.deck === n);
+/** Targets per viewport: hit zones, drawn buttons (short side), pads. */
+const TARGETS = { "844x390": { zone: 44, button: 32, pad: 46 }, "844x330": { zone: 38, button: 28, pad: 28 } };
+
+test("phone_is_the_default_band_on_top_decks_widened_mixer_centred", () => {
+  assert.equal(LAYOUT, "phone");
+  for (const vp of VIEWPORTS) {
+    const { fit } = geometry(vp, "phone");
+    const tag = vp.tag;
+    const usable = vp.H - Math.max(vp.insets.bottom || 0, SAFE_FALLBACK.bottom) - (vp.insets.top || 0);
+    const band = fit.stripBottom - fit.stripTop;
+    assert.ok(Math.abs(band - Math.max(30, Math.round(usable * 0.1))) < 1, `${tag}: band ${band}`);
+    assert.ok(fit.top >= fit.stripBottom, `${tag}: the board under the band`);
+    const xf = byId.get("xfader");
+    assert.ok(fit.top + ((xf.y + xf.h) / 100) * fit.height <= vp.H - XFADER_CLEAR_PX + EPS, `${tag}: crossfader clears`);
+    const L = Math.max(vp.insets.left || 0, SAFE_FALLBACK.side), Rr = Math.max(vp.insets.right || 0, SAFE_FALLBACK.side);
+    assert.ok(Math.abs(fit.left - L) < EPS && Math.abs(fit.width - (vp.W - L - Rr)) < EPS, `${tag}: full width`);
+    const [d1, mx, d2] = fit.sections;
+    // the mixer keeps the panel's proportions, centred; the decks take the rest, 6 px off it
+    assert.ok(Math.abs(mx.width - 0.32 * fit.height * 1.805) < EPS, `${tag}: mixer ${mx.width}`);
+    assert.ok(Math.abs(mx.left + mx.width / 2 - fit.width / 2) < EPS, `${tag}: mixer centred`);
+    assert.equal(d1.left, 0);
+    assert.ok(Math.abs(d1.width - (mx.left - 6)) < EPS && Math.abs(d2.left - (mx.left + mx.width + 6)) < EPS, `${tag}: deck gaps`);
+    assert.ok(Math.abs(d2.left + d2.width - fit.width) < EPS && Math.abs(d1.width - d2.width) < EPS, `${tag}: decks`);
+    assert.ok(d1.width > 0.34 * fit.height * 1.805 * 1.2, `${tag}: decks wider than the photo's`);
+  }
+});
+
+test("phone_decks_keep_the_flx4_topology", () => {
+  for (const vp of VIEWPORTS) {
+    const { fit, drawn } = geometry(vp, "phone");
+    for (const n of [1, 2]) {
+      const g = (id) => drawn.get(`d${n}-${id}`);
+      const cx = (r) => r.x + r.w / 2, cy = (r) => r.y + r.h / 2;
+      const tag = `${vp.tag} deck ${n}`;
+      const sec = fit.sections.find((s) => s.key === `deck${n}`);
+      // the loop row, left to right, one row
+      const row = ["in", "out", "4beat", "call-prev", "call-next", "sync"].map(g);
+      for (let i = 1; i < row.length; i++) {
+        assert.ok(cx(row[i]) > cx(row[i - 1]) && right(row[i - 1]) <= row[i].x, `${tag}: loop row order ${i}`);
+        assert.ok(Math.abs(cy(row[i]) - cy(row[0])) < EPS, `${tag}: one loop row`);
+      }
+      const jog = g("jog");
+      assert.ok(Math.abs(jog.w - jog.h) < EPS && jog.shape === "circle", `${tag}: the jog is round`);
+      assert.ok(jog.y >= Math.max(...row.map(bottom)) - EPS, `${tag}: the jog under the loop row`);
+      // SHIFT over CUE over PLAY, at the deck's left
+      const [sh, cue, play] = ["shift", "cue", "play"].map(g);
+      assert.ok(bottom(sh) <= cue.y + EPS && bottom(cue) <= play.y + EPS, `${tag}: SHIFT, CUE, PLAY`);
+      const pads = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => g(`pad${i}`));
+      const modes = ["hotcue", "padfx1", "beatjump", "sampler"].map((m) => g(`mode-${m}`));
+      for (const r of [sh, cue, play]) assert.ok(right(r) <= Math.min(...pads.map((p) => p.x)) + EPS, `${tag}: left column`);
+      // mode row over the 2 x 4 pads, under the jog; columns line up
+      for (let i = 0; i < 4; i++) {
+        assert.ok(bottom(modes[i]) <= pads[i].y + EPS && bottom(pads[i]) <= pads[i + 4].y + EPS, `${tag}: rows ${i}`);
+        assert.ok(Math.abs(cx(modes[i]) - cx(pads[i])) < EPS && Math.abs(cx(pads[i]) - cx(pads[i + 4])) < EPS, `${tag}: columns`);
+        if (i) assert.ok(pads[i].x >= right(pads[i - 1]) + 4 - EPS && pads[i].y === pads[i - 1].y, `${tag}: pad gaps`);
+      }
+      assert.ok(Math.abs(pads[4].y - bottom(pads[0]) - 4) < EPS, `${tag}: 4 px between pad rows`);
+      assert.ok(Math.min(...modes.map((m) => m.y)) >= bottom(jog) - EPS, `${tag}: mode row under the jog`);
+      for (const p of pads) {
+        const a = p.w / p.h;
+        assert.ok(a >= 1 - EPS && a <= 1.4 + EPS, `${tag}: pad aspect ${a}`);
+      }
+      // the tempo fader at the deck's right edge (the outer edge of deck 2), right of the pads
+      const t = g("tempo");
+      assert.ok(t.x >= Math.max(...pads.map(right)) - EPS && sec.left + sec.width - right(t) <= 6 + EPS, `${tag}: tempo at the right edge`);
+      assert.ok(t.h > 100, `${tag}: tempo travel ${t.h}`);
+      // the jog: no bigger than 44 % of the deck's height
+      assert.ok(jog.w <= 0.44 * fit.height + EPS, `${tag}: jog ${jog.w}`);
+    }
+  }
+});
+
+test("phone_meets_the_targets_in_the_decks", () => {
+  for (const vp of VIEWPORTS.filter((v) => TARGETS[v.tag])) {
+    const T = TARGETS[vp.tag];
+    const { drawn, map } = geometry(vp, "phone");
+    for (const n of [1, 2]) {
+      for (const c of deckIds(n)) {
+        const d = drawn.get(c.id);
+        const tag = `${vp.tag}: ${c.id}`;
+        if (isBig(c)) continue;
+        const e = map.extent(c.id);
+        assert.ok(e.w >= T.zone - 0.5 && e.h >= T.zone - 0.5, `${tag} zone ${e.w.toFixed(1)} x ${e.h.toFixed(1)}`);
+        const short = Math.min(d.w, d.h);
+        if (c.kind === "pad") assert.ok(short >= T.pad - EPS, `${tag} pad ${short.toFixed(1)}`);
+        else assert.ok(short >= T.button - EPS, `${tag} drawn ${short.toFixed(1)}`);
+      }
     }
   }
 });

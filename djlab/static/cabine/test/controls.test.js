@@ -270,3 +270,18 @@ test("router_hands_a_zone_touch_to_its_widget_with_capture", () => {
   router.destroy();
   assert.equal(sec.listeners.get("pointerdown").size, 0);
 });
+
+test("fader_cap_set_by_the_layout_sets_the_travel", () => {
+  // phone layout: the tempo box is re-proportioned, its cap is not the photo's
+  // share of the box; the layout tells the widget, the travel follows
+  const el = new FakeEl({ left: 0, top: 0, width: 24, height: 250 });
+  const got = [];
+  const f = new Fader(el, { dir: "down", cap: { w: 3.68, h: 7.40 }, w: 3.68, h: 32.74, value: 0 }, (v) => got.push(v), fakeClock());
+  assert.ok(Math.abs(f.travelPx() - 250 * (1 - 7.40 / 32.74)) < 1e-9, "the photo's cap share by default");
+  f.setCap({ w: 1, h: 25 / 250 });
+  assert.ok(Math.abs(f.travelPx() - 225) < 1e-9);
+  el.fire("pointerdown", 1, 10, 0);
+  el.fire("pointermove", 1, 10, 225);
+  assert.ok(Math.abs(got.at(-1) - 1) < 1e-9, "the whole new travel is the whole range");
+  el.fire("pointerup", 1, 10, 225);
+});

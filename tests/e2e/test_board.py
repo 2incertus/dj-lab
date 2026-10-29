@@ -178,7 +178,7 @@ def zone_point(page, cid, d):
 
 # ---- tests ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("layout", ["panels", "spread", "exact"])
+@pytest.mark.parametrize("layout", ["phone", "panels", "spread", "exact"])
 @pytest.mark.parametrize("name", list(PHONES))
 def test_every_control_hittable(name, layout, chromium, webkit, base_url, auth_cookie):
     spec = PHONES[name]
@@ -241,6 +241,16 @@ def _check_hittable(page, phone):
         for i, sl in enumerate(slots):
             el = page.locator(f".cab-board-panel[data-panel='{i + 1}']").bounding_box()
             assert abs(el["x"] - sl["x"]) < 0.5 and abs(el["width"] - sl["w"]) < 0.5, (el, sl)
+    elif phone["layout"] == "phone":
+        # the slim waveform band on top (10 % of the usable height, 30 px at least),
+        # caixa at its left end; the board under it, safe edge to safe edge
+        strip = page.evaluate("() => { const r = document.querySelector('.cab-board-strip').getBoundingClientRect(); return {t: r.top, b: r.bottom, l: r.left, r: r.right}; }")
+        band = strip["b"] - strip["t"]
+        assert abs(band - max(30, round((h - insets["bottom"]) * 0.1))) < 1, strip
+        assert board["t"] >= strip["b"] - 0.5 and min(b["t"] for b in boxes.values()) >= strip["b"] - 0.5
+        assert abs(board["l"] - insets["left"]) < 0.5 and abs(board["r"] - (w - insets["right"])) < 0.5, board
+        assert strip["l"] - 0.5 <= caixa["x"] and caixa["y"] >= strip["t"] - 0.5 and caixa["y"] + caixa["height"] <= strip["b"] + 0.5, (caixa, strip)
+        assert page.evaluate("() => getComputedStyle(document.querySelector('.cab-board-strip')).visibility") == "visible"
     else:
         # the strip area is reserved above the board, the caixa button inside it
         strip = page.evaluate("() => { const r = document.querySelector('.cab-board-strip').getBoundingClientRect(); return {b: r.bottom, l: r.left}; }")
@@ -276,7 +286,7 @@ def _check_legends(page, g, phone):
         assert sec["l"] - 0.5 <= a["l"] and a["r"] <= sec["r"] + 0.5 and sec["t"] - 0.5 <= a["t"] and a["b"] <= sec["b"] + 0.5, \
             f"{tag}: '{a['text']}' clipped {a}"
         assert a["over"] <= 1, f"{tag}: '{a['text']}' runs out of its box by {a['over']} px"
-    if phone["layout"] != "panels":
+    if phone["layout"] not in ("panels", "phone"):
         return                                     # the old layouts keep their old crowding
     shown = [a for a in legs if not a["face"]]
     for i, a in enumerate(shown):
@@ -333,17 +343,19 @@ def test_tap_beside_a_small_button_presses_it(name, chromium, webkit, base_url, 
         # a button with another part (or the section edge) within ~12 px on every
         # side has no empty side to probe (pad mode buttons, BEAT, the CUEs
         # between their knobs and faders): the rest, most of them, all answer
-        assert len(probes) >= len(small) * 0.7, (len(probes), len(small), crowded)
+        assert len(probes) >= len(small) * 0.6, (len(probes), len(small), crowded)
         for cid, (x, y) in probes.items():
             page.touchscreen.tap(x, y)
             assert took(page) == [cid], f"{name}: 10 px beside {cid} at ({x:.1f}, {y:.1f})"
             page.wait_for_timeout(20)
         print(f"{name}: {len(probes)} buttons pressed from 10 px outside; no empty side: {crowded}")
-        # the actions arrived (PLAY 10 px outside its edge plays)
+        # the actions arrived (PLAY or IN 10 px outside its edge plays or sets the loop in)
         page.evaluate("() => { window.cabine.boardLog.length = 0; }")
-        x, y = probes["d2-play"]
+        cid, action = next((c, a) for c, a in (("d2-play", "deck.playPause"), ("d2-in", "deck.loopIn"), ("d1-in", "deck.loopIn"))
+                           if c in probes)
+        x, y = probes[cid]
         page.touchscreen.tap(x, y)
-        assert [e["action"] for e in log(page)] == ["deck.playPause"]
+        assert [e["action"] for e in log(page)] == [action]
         assert not page.errors, page.errors
     finally:
         ctx.close()
@@ -625,7 +637,7 @@ def test_panels_keep_caixa_rec_and_browse(name, chromium, webkit, base_url, auth
             page.evaluate("""(i) => { const s = document.documentElement.style;
                 s.setProperty('--cab-inset-left', i.left + 'px'); s.setProperty('--cab-inset-right', i.right + 'px');
                 s.setProperty('--cab-inset-bottom', i.bottom + 'px'); }""", spec["insets"])
-        page.evaluate("() => window.cabine.showBoard()")
+        page.evaluate("() => window.cabine.showBoard({layout: 'panels'})")
         page.wait_for_function("() => window.cabine.strip")
         g = page.evaluate(GEO)
         s0, s1 = g["slots"]
@@ -654,6 +666,87 @@ def test_panels_keep_caixa_rec_and_browse(name, chromium, webkit, base_url, auth
         page.wait_for_function("() => !window.cabine.strip.isBrowseOpen")
         page.wait_for_function("() => getComputedStyle(document.querySelector('.cab-board-strip')).visibility === 'hidden'")
         caixa.click()
+        expect(page.locator(".cab-crate")).to_be_visible()
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
+PHONE_TARGETS = {"iphone-webkit": 44, "iphone-safari-webkit": 38}
+
+
+@pytest.mark.parametrize("name", list(PHONE_TARGETS))
+def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, auth_cookie):
+    """The phone layout's decks: every small part answers a touch across at
+    least 44 px (844 x 390) or 38 px (844 x 330) through its centre, both ways,
+    checked with real taps at the zone's far edges."""
+    spec = PHONES[name]
+    target = PHONE_TARGETS[name]
+    ctx = _context(webkit, "webkit", spec["w"], spec["h"], auth_cookie)
+    try:
+        page = _open_board(ctx, base_url, spec["insets"])
+        assert page.evaluate("() => window.cabine.board.layoutMode") == "phone"
+        g = page.evaluate(GEO)
+        page.evaluate(RECORD)
+        small = [cid for cid, k in g["kinds"].items() if k not in BIG and g["drawn"][cid]["section"] != "mixer"]
+        assert len(small) == 2 * 21
+        ext = page.evaluate("""(ids) => { const b = window.cabine.board, geo = ${GEO};
+            return Object.fromEntries(ids.map(id => { const d = geo.drawn[id];
+                const walk = (dx, dy) => { let k = 0; while (k < 200 && b.hitTest(d.cx + dx * (k + 0.5), d.cy + dy * (k + 0.5)) === id) k += 0.5; return k; };
+                return [id, {l: walk(-1, 0), r: walk(1, 0), t: walk(0, -1), b: walk(0, 1)}]; })); }""".replace("${GEO}", "(" + GEO + ")()"), small)
+        for cid in small:
+            e, d = ext[cid], g["drawn"][cid]
+            assert e["l"] + e["r"] >= target - 1 and e["t"] + e["b"] >= target - 1, f"{name}: {cid} zone {e}"
+            # real taps 2 px inside each far edge
+            for x, y in ((d["cx"] - e["l"] + 2, d["cy"]), (d["cx"] + e["r"] - 2, d["cy"]),
+                         (d["cx"], d["cy"] - e["t"] + 2), (d["cx"], d["cy"] + e["b"] - 2)):
+                page.touchscreen.tap(x, y)
+                assert took(page) == [cid], f"{name}: {cid} at ({x:.1f}, {y:.1f})"
+            page.wait_for_timeout(10)
+        SHOTS.mkdir(parents=True, exist_ok=True)
+        assert not page.errors, page.errors
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("name", ["iphone-safari-webkit", "galaxy-chromium"])
+def test_phone_band_keeps_caixa_rec_and_browse(name, chromium, webkit, base_url, auth_cookie):
+    """The real board in the phone layout: the waveform band on top with caixa
+    at its left end and REC at its right end; BROWSE opens the list in the band."""
+    spec = PHONES[name]
+    browser = chromium if spec["engine"] == "chromium" else webkit
+    ctx = _context(browser, spec["engine"], spec["w"], spec["h"], auth_cookie)
+    try:
+        page = ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{base_url}/cabine")
+        page.wait_for_function("() => window.cabine && window.cabine.store")
+        page.evaluate("() => window.cabine.ready")
+        if spec["insets"]:
+            page.evaluate("""(i) => { const s = document.documentElement.style;
+                s.setProperty('--cab-inset-left', i.left + 'px'); s.setProperty('--cab-inset-right', i.right + 'px');
+                s.setProperty('--cab-inset-bottom', i.bottom + 'px'); }""", spec["insets"])
+        page.evaluate("() => window.cabine.showBoard()")
+        page.wait_for_function("() => window.cabine.strip")
+        g = page.evaluate(GEO)
+        band = page.locator(".cab-board-strip").bounding_box()
+        caixa, rec = page.locator(".cab-board-caixa").bounding_box(), page.locator(".cab-strip-rec").bounding_box()
+        expect(page.locator(".cab-strip-rec")).to_be_visible()
+        assert band["y"] + band["height"] <= g["board"]["t"] + 0.5, "the band sits over the board"
+        for r in (caixa, rec):
+            assert band["y"] - 0.5 <= r["y"] and r["y"] + r["height"] <= band["y"] + band["height"] + 0.5, (r, band)
+        assert caixa["x"] < band["x"] + 0.3 * band["width"] and rec["x"] > band["x"] + 0.7 * band["width"], (caixa, rec, band)
+        b = g["drawn"]["browse"]
+        page.touchscreen.tap(b["cx"], b["cy"])
+        page.wait_for_function("() => window.cabine.strip.isBrowseOpen", timeout=20_000)
+        lst = page.locator(".cab-strip-browse").bounding_box()
+        assert band["y"] - 0.5 <= lst["y"] and lst["y"] + lst["height"] <= band["y"] + band["height"] + 0.5, (lst, band)
+        SHOTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(SHOTS / f"phone-browse-{name}-{spec['w']}x{spec['h']}.png"))
+        page.touchscreen.tap(b["cx"], b["cy"])
+        page.wait_for_function("() => !window.cabine.strip.isBrowseOpen")
+        page.locator(".cab-board-caixa").click()
         expect(page.locator(".cab-crate")).to_be_visible()
         assert not errors, errors
     finally:

@@ -50,9 +50,9 @@
 
 import { BOARD_ASPECT, CONTROLS, INDICATORS, LEGENDS } from "../flx4-map.js";
 
-export const LAYOUT = "panels";
-export const LAYOUTS = ["panels", "spread", "exact"];
-export const STRIP_SHARE = { exact: 0.22, spread: 0.12, panels: 0 };
+export const LAYOUT = "phone";
+export const LAYOUTS = ["phone", "panels", "spread", "exact"];
+export const STRIP_SHARE = { exact: 0.22, spread: 0.12, panels: 0, phone: 0.10 };
 export const SAFE_FALLBACK = { side: 47, bottom: 21 };
 export const XFADER_CLEAR_PX = 34;
 /** panels: the board's distance from the top edge (no strip above it). */
@@ -110,6 +110,7 @@ export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
     bottom: Math.max(insets.bottom || 0, SAFE_FALLBACK.bottom),
     top: Math.max(insets.top || 0, 0),
   };
+  if (mode === "phone") return fitPhone(W, H, safe);
   const stripTop = safe.top;
   const stripBottom = stripTop + Math.round(STRIP_SHARE[mode] * H);
   const above = mode === "panels" ? Math.max(safe.top, PANELS_TOP_PX) : stripBottom;
@@ -135,6 +136,139 @@ export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
     return out;
   });
   return { mode, left, top, width, height, unit, sections, stripTop, stripBottom: mode === "panels" ? stripTop : stripBottom, safe };
+}
+
+// ---- the "phone" layout (Cabine v2, Task V1b) -----------------------------------------
+//
+// The FLX4's own proportions cap every part by the phone's height (V1: the
+// smallest zone 20.5 x 28.5 px at 844 x 330 with 105 px of empty width each
+// side). "phone" keeps the hardware's arrangement and re-solves the decks'
+// proportions for a phone:
+// - a slim two-lane waveform band across the top (STRIP_SHARE.phone of the
+//   usable height, at least PHONE.bandMin px): the strip, caixa at its left
+//   end, Beat FX status and REC at its right end;
+// - the mixer keeps the panel's proportions (as tall as the crossfader rule
+//   allows) and sits in the middle;
+// - each deck takes all the width left on its side, PHONE.deckGap px off the
+//   mixer, and lays its parts out by phoneDeck(): the loop row on top (IN, OUT,
+//   4 BEAT/EXIT, CALL, CALL, SYNC, evenly), the jog under it, SHIFT / CUE / PLAY
+//   in the left column, the mode row over the 2 x 4 pads, the tempo fader at
+//   the deck's right edge (the outer edge for deck 2), as on the hardware.
+
+export const PHONE = {
+  bandMin: 30, bandGap: 2, deckGap: 6,
+  edge: 3, gap: 4, padGap: 4, jogLoopGap: 3,
+  jogShare: 0.44, padAspectMax: 1.4,
+};
+
+/** What a deck aims for, by its height: Safari with its bars (deck ~271 px
+ *  tall at 844 x 330) to the installed app (~326 px at 844 x 390). */
+export function phoneTargets(deckH) {
+  const t = Math.min(1, Math.max(0, (deckH - 270) / 56));
+  return { zone: 38 + 6 * t, button: 28 + 4 * t, pad: 34 + 12 * t };
+}
+
+function fitPhone(W, H, safe) {
+  const usable = H - safe.top - safe.bottom;
+  const band = Math.max(PHONE.bandMin, Math.round(STRIP_SHARE.phone * usable));
+  const stripTop = safe.top, stripBottom = stripTop + band;
+  const above = stripBottom + PHONE.bandGap;
+  const availW = Math.max(0, W - safe.left - safe.right);
+  const availH = Math.max(0, H - safe.bottom - above);
+  const xfH = (H - XFADER_CLEAR_PX - above) / XFADER_BOTTOM;
+  const height = Math.max(0, Math.min(availH, xfH));
+  const unit = height / 100;
+  const mixW = ((SECTIONS[1].x1 - SECTIONS[1].x0) / 100) * height * BOARD_ASPECT;
+  const mixL = (availW - mixW) / 2;
+  const deckW = Math.max(0, mixL - PHONE.deckGap);
+  const sections = [
+    { ...SECTIONS[0], left: 0, width: deckW },
+    { ...SECTIONS[1], left: mixL, width: mixW },
+    { ...SECTIONS[2], left: mixL + mixW + PHONE.deckGap, width: deckW },
+  ];
+  return {
+    mode: "phone", left: safe.left, top: above, width: availW, height, unit, sections, stripTop, stripBottom, safe,
+    deck: phoneDeck(deckW, height),
+  };
+}
+
+/**
+ * One deck's parts for the phone layout, deck-relative px (deck 2 is the same
+ * deck, as on the hardware). Heights: a legend line, the loop row, the jog,
+ * the mode row, two pad rows; the jog takes min(the width beside the tempo
+ * column, PHONE.jogShare of the height, what the rows leave at their targets);
+ * the pads take the rest (square-ish: width / height in 1 .. padAspectMax),
+ * the left column the width the pads and the tempo leave.
+ * @returns {boxes: {[id without "dN-"]: {x, y, w, h, shape}}, legends: {[text]: {x, y}}, meta}
+ */
+export function phoneDeck(Wd, Hd) {
+  const P = PHONE, tg = phoneTargets(Hd);
+  const base = Math.max(LEGEND_MIN_PX, (Hd / 100) * 1.85);
+  const btn = tg.button;
+  const loopTop = P.edge + base + 2;                        // a legend line over the loop row
+  const loopBottom = loopTop + btn;
+  // the mode row's zone runs from the jog's edge to halfway to the pads
+  const gm = Math.max(P.gap, tg.zone - btn - P.padGap / 2);
+  const fixed = loopBottom + P.jogLoopGap + gm + btn + P.padGap + P.padGap + P.edge;
+  const T = Math.max(22, Math.min(30, Wd * 0.085));          // the tempo column
+  const cMin = Math.max(btn, tg.zone - P.edge - P.gap / 2);   // the left column: CUE's zone reaches the deck edge
+  const padWMax = (Wd - 2 * P.edge - cMin - T - 2 * P.gap - 3 * P.padGap) / 4;
+  const jogCap = Math.min(Wd - 2 * P.edge - T - P.gap, P.jogShare * Hd);
+  let D = Math.max(0, Math.min(jogCap, Hd - fixed - 2 * tg.pad));
+  let ph = (Hd - fixed - D) / 2;
+  let pw = Math.min(padWMax, P.padAspectMax * ph);
+  if (pw < ph) {                                             // narrow deck: square pads, the height to the jog
+    ph = pw;
+    D = Math.max(0, Math.min(jogCap, Hd - fixed - 2 * ph));
+  }
+  const spare = Math.max(0, Hd - fixed - D - 2 * ph);
+  const C = Wd - 2 * P.edge - 4 * pw - 3 * P.padGap - T - 2 * P.gap;
+  const padsX = P.edge + C + P.gap;
+  const padsRight = padsX + 4 * pw + 3 * P.padGap;
+  const jogY = loopBottom + P.jogLoopGap + spare / 2;
+  const modeY = jogY + D + gm + spare / 2;
+  const padY = modeY + btn + P.padGap;
+  const b = {};
+  const circle = (cx, cy, d) => ({ x: cx - d / 2, y: cy - d / 2, w: d, h: d, shape: "circle" });
+  const pitch = Wd / 6;
+  ["in", "out", "4beat", "call-prev", "call-next", "sync"].forEach((id, i) => {
+    b[id] = circle((i + 0.5) * pitch, loopTop + btn / 2, btn);
+  });
+  b.jog = circle((P.edge + padsRight) / 2, jogY + D / 2, D);
+  ["hotcue", "padfx1", "beatjump", "sampler"].forEach((m, i) => {
+    b[`mode-${m}`] = { x: padsX + i * (pw + P.padGap), y: modeY, w: pw, h: btn, shape: "rect" };
+  });
+  for (let i = 0; i < 8; i++) {
+    b[`pad${i + 1}`] = { x: padsX + (i % 4) * (pw + P.padGap), y: padY + Math.floor(i / 4) * (ph + P.padGap), w: pw, h: ph, shape: "rect" };
+  }
+  const cueD = Math.min(C, ph + P.padGap / 2);
+  b.shift = { x: P.edge, y: modeY, w: C, h: btn, shape: "rect" };
+  b.cue = circle(P.edge + C / 2, padY + ph / 2, Math.min(cueD, ph));
+  b.play = circle(P.edge + C / 2, padY + ph + P.padGap + ph / 2, Math.min(cueD, ph));
+  // the tempo fader: from under SYNC's legends to the deck's bottom, at its right edge
+  const tTop = loopBottom + 2 * (base + 2);
+  const tBottom = Hd - P.edge;
+  b.tempo = { x: Wd - P.edge - T, y: tTop, w: T, h: tBottom - tTop, shape: "rect" };
+  const capH = Math.max(18, Math.min(26, b.tempo.h * 0.12));
+  const cx = (r) => r.x + r.w / 2;
+  const legends = {
+    "CUE/LOOP": { x: (cx(b["call-prev"]) + cx(b["call-next"])) / 2, y: loopTop - 2 - base * 1.5 },
+    "CALL": { x: (cx(b["call-prev"]) + cx(b["call-next"])) / 2, y: loopTop - 1 - base / 2 },
+    "1/2X": { x: cx(b["call-prev"]), y: loopBottom + 1 + base / 2 },
+    "2X": { x: cx(b["call-next"]), y: loopBottom + 1 + base / 2 },
+    "\u2212": { x: b.tempo.x - 5, y: b.tempo.y + capH / 2 },
+    "0": { x: b.tempo.x - 5, y: b.tempo.y + b.tempo.h / 2 },
+    "+": { x: b.tempo.x - 5, y: tBottom - capH / 2 },
+  };
+  return { boxes: b, legends, tempoCap: { w: T, h: capH },
+    meta: { targets: tg, jog: D, pad: { w: pw, h: ph }, column: C, tempo: T, button: btn, spare } };
+}
+
+/** A fader's cap in px for its drawn box d: the photo's cap scaled with the
+ *  box, or (phone decks) the tempo cap phoneDeck chose. */
+export function faderCap(fit, c, d) {
+  if (fit.mode === "phone" && c.section === "deck" && c.kind === "fader") return { ...fit.deck.tempoCap, w: d.w };
+  return { w: (c.cap.w / c.w) * d.w, h: (c.cap.h / c.h) * d.h };
 }
 
 /** The two gaps between the sections, in screen CSS px: [{x, y, w, h}, {x, y, w, h}]. */
@@ -232,13 +366,27 @@ function growMax(lo, hi, pass) {
  */
 export function placeControls(fit, controls = CONTROLS) {
   const out = new Map();
-  const base = new Map(controls.map((c) => [c.id, relBox(c, fit)]));
   const secOf = (c) => sectionOf(c.x).key;
+  // phone: the decks' parts come from phoneDeck, final; the mixer as everywhere
+  const phoneBox = (c) => {
+    if (fit.mode !== "phone" || c.section !== "deck") return null;
+    const r = fit.deck.boxes[c.id.replace(/^d[12]-/, "")];
+    const sec = fit.sections.find((t) => t.key === secOf(c));
+    return r ? { x: sec.left + r.x, y: r.y, w: r.w, h: r.h, shape: r.shape } : null;
+  };
+  const base = new Map(controls.map((c) => {
+    const p = phoneBox(c);
+    return [c.id, p ? R(p.x, p.y, p.w, p.h) : relBox(c, fit)];
+  }));
+  for (const c of controls) {
+    const p = phoneBox(c);
+    if (p) out.set(c.id, { ...R(p.x, p.y, p.w, p.h), shape: p.shape, section: secOf(c), base: base.get(c.id), limit: null });
+  }
 
   // pads first: the grid fills the deck's pad area
   for (const deck of [1, 2]) {
     const pads = controls.filter((c) => c.kind === "pad" && c.deck === deck);
-    if (!pads.length) continue;
+    if (!pads.length || out.has(pads[0].id)) continue;
     const bs = pads.map((c) => base.get(c.id));
     const area = R(Math.min(...bs.map((b) => b.x)), Math.min(...bs.map((b) => b.y)), 0, 0);
     area.w = Math.max(...bs.map(rightOf)) - area.x;
@@ -260,13 +408,13 @@ export function placeControls(fit, controls = CONTROLS) {
   for (const c of controls) {
     if (!isBig(c)) continue;
     const b = base.get(c.id);
-    const d = { ...b, shape: c.kind === "jog" ? "circle" : "rect", section: secOf(c), base: b, limit: null };
+    const d = out.get(c.id) || { ...b, shape: c.kind === "jog" ? "circle" : "rect", section: secOf(c), base: b, limit: null };
     out.set(c.id, d);
     obstacles.push({ ...d, id: c.id });
   }
   for (const m of INDICATORS) obstacles.push({ ...relBox(m, fit), shape: "rect", section: sectionOf(m.x).key, id: m.id });
 
-  const smalls = controls.filter((c) => !isBig(c) && c.kind !== "pad");
+  const smalls = controls.filter((c) => !isBig(c) && c.kind !== "pad" && !out.has(c.id));
   for (const c of smalls) {
     const b = base.get(c.id);
     const sec = sectionRect(fit, secOf(c));
@@ -637,8 +785,13 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
     const sec = sectionOf(ls[0].x).key;
     const s = fit.sections.find((t) => t.key === sec);
     const bases = ls.map((l) => Math.max(LEGEND_MIN_PX, l.small ? base * 0.9 : l.strong ? base * 1.15 : base));
-    const x = s.left + (ls[0].x - s.x0) * pxw(fit);
-    const yMid = (ls[0].y + ls.at(-1).y) / 2 * u;
+    // where it is printed: the photo's place, or (phone decks) phoneDeck's anchor
+    const anchor = (l) => {
+      const a = fit.mode === "phone" && sec !== "mixer" ? fit.deck.legends[l.text] : null;
+      return a ? { x: s.left + a.x, y: a.y } : { x: s.left + (l.x - s.x0) * pxw(fit), y: l.y * u };
+    };
+    const x = anchor(ls[0]).x;
+    const yMid = (anchor(ls[0]).y + anchor(ls.at(-1)).y) / 2;
     const forms = (l) => [l.text, ...(SHORT[l.text] || [])];
     let done = null;
     // sizes: every line from its base down, full text first, then the short forms
@@ -657,7 +810,31 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
         if (ok) { done = { zs, rs }; break outer; }
       }
     }
+    // a two-line stack with no room for two lines: one line (CUE/LOOP CALL)
+    let joined = false;
+    if (!done && ls.length === 2) {
+      const texts = [`${ls[0].text} ${ls[1].text}`, ...(SHORT[ls[0].text] || []).map((t) => `${t} ${ls[1].text}`)];
+      const b0 = Math.min(...bases);
+      one: for (const t of texts) {
+        for (let px = b0; px >= LEGEND_MIN_PX - 1e-9; px -= 0.25) {
+          const tw = textWidth(t, px);
+          for (const dy of LEGEND_DY) for (const dx of LEGEND_DX) {
+            const r = R(x - tw / 2 + dx, yMid - px / 2 + dy, tw, px);
+            if (clear(r, null, sec)) { done = { zs: [{ text: t, px }], rs: [r] }; joined = true; break one; }
+          }
+        }
+      }
+    }
     const fits = !!done;
+    if (joined) {
+      const [i0, i1] = group, z = done.zs[0], r = done.rs[0];
+      plan.push({ key: `legend:${i0}`, owner: null, part: "legend", boxed: false, text: z.text, lines: [z.text],
+        px: z.px, fits, x: r.x, y: r.y, w: r.w, h: r.h, side: "at", section: sec });
+      plan.push({ key: `legend:${i1}`, owner: null, part: "legend", boxed: false, text: LEGENDS[i1].text, lines: [LEGENDS[i1].text],
+        px: z.px, fits: true, hidden: true, joined: `legend:${i0}`, x: 0, y: 0, w: 0, h: 0, side: "none", section: sec });
+      taken.push({ ...r, section: sec });
+      continue;
+    }
     if (!done) {
       const zs = ls.map((l) => ({ text: forms(l).at(-1), px: LEGEND_MIN_PX }));
       let y = yMid - (zs.length * (LEGEND_MIN_PX + 1)) / 2;
@@ -673,7 +850,8 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
   // legends under a part: the SHIFT legends (boxed) of what works in v1 first;
   // a SHIFT legend for a layer v1 does not have (no shift action, or "not
   // yet") is left off where there is no room for it
-  const works = (c) => (c.sub === "\u25B2\uFE0E" || c.subPlain || (c.shift && c.shift !== "board.notYet"));
+  // (PLAY/PAUSE, an unboxed name under PLAY, says what its face already shows: optional too)
+  const works = (c) => (c.sub === "\u25B2\uFE0E" || (!c.subPlain && c.shift && c.shift !== "board.notYet"));
   const subs = controls.filter((c) => c.sub);
   for (const c of [...subs.filter(works), ...subs.filter((x) => !works(x))]) {
     const d = drawn.get(c.id);
@@ -686,7 +864,7 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
     const around = aroundSpots(d, d.section, "below", yWant, !works(c));
     // the pad mode buttons sit between the jog and the pads, and a round
     // button with no face has room on it: there, inside, at the bottom
-    const inButton = c.kind === "button" && (c.look === "mode" || (!c.face && works(c)));
+    const inButton = c.kind === "button" && (c.look === "mode" || (works(c) && (!c.face || c.look === "square")));
     const spots = (tw0, th, z) => {
       const out = around(tw0, th);
       if (inButton) {
@@ -697,7 +875,9 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
         const inside = round
           ? (q) => Math.hypot(q.w / 2, q.h / 2) <= d.w / 2 - 2
           : (q) => q.x >= d.x + 1.5 && rightOf(q) <= rightOf(d) - 1.5;
-        out.push({ side: "in", r, inside });
+        // right after its printed place: inside reads as its own legend, beside it may not
+        const k = out.findIndex((sp) => sp.side !== "below");
+        out.splice(k < 0 ? out.length : k, 0, { side: "in", r, inside });
       }
       return out;
     };

@@ -10,7 +10,7 @@ import { MIXER_ACTIONS } from "../engine/mixer.js";
 import { BEATFX_ACTIONS } from "../engine/fx.js";
 import { SAMPLER_ACTIONS } from "../engine/sampler.js";
 import {
-  fitBoard, placeBox, sectionOf, LAYOUT, LAYOUTS, STRIP_SHARE, XFADER_CLEAR_PX, SAFE_FALLBACK,
+  fitBoard, placeBox, sectionOf, placeControls, faderCap, LAYOUT, LAYOUTS, STRIP_SHARE, XFADER_CLEAR_PX, SAFE_FALLBACK,
 } from "../ui/board-layout.js";
 import { faderDelta, fineScale, TEMPO_FINE_SCALE } from "../ui/controls.js";
 
@@ -165,9 +165,10 @@ const PHONES = [
 
 test("crossfader_clears_the_home_indicator_zone", () => {
   const xf = byId.get("xfader");
-  assert.equal(LAYOUT, "panels", "panels is the default (Cabine v2); spread and exact stay for comparison");
+  assert.equal(LAYOUT, "phone", "phone is the default (Cabine v2 V1b); panels, spread and exact stay for comparison");
   assert.ok(XFADER_CLEAR_PX >= 34);
-  for (const mode of LAYOUTS) {
+  // "phone" re-solves the decks' proportions (test/board-layout.test.js covers it)
+  for (const mode of LAYOUTS.filter((m) => m !== "phone")) {
     for (const { W, H, insets } of PHONES) {
       const b = fitBoard({ W, H, insets, mode });
       const tag = `${mode} ${W}x${H}`;
@@ -225,7 +226,10 @@ test("tempo_fine_step_reaches_spec_resolution", () => {
   for (const mode of LAYOUTS) {
     for (const ph of PHONES.slice(0, 3)) {
       const b = fitBoard({ ...ph, mode });
-      const travel = ((t.h - t.cap.h) / 100) * b.height;      // the drawn track
+      const drawnT = placeControls(b).get("d1-tempo");
+      const travel = drawnT.h - faderCap(b, t, drawnT).h;      // the drawn track
+      if (mode !== "phone") assert.ok(Math.abs(travel - ((t.h - t.cap.h) / 100) * b.height) < 1e-6);
+      else assert.ok(travel > 150, `phone: a long tempo track (${travel})`);
       const coarse = Math.abs(faderDelta(1, travel)) * rateSpan;
       const fine = Math.abs(faderDelta(1, travel, fineScale(travel))) * rateSpan;
       const tag = `${mode} ${ph.W}x${ph.H}, travel ${travel.toFixed(1)} px, 1:${fineScale(travel)}`;

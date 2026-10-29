@@ -9,7 +9,7 @@
 //             the board's own ("board.*"). control carries deck, index, band,
 //             arg. Missing bindings are skipped. Task 10 binds the engine.
 //   opts      {onCrate(): the "caixa" button, onPadMode(deck, mode),
-//              layout: "panels" (default) | "spread" | "exact" (ui/board-layout.js)}
+//              layout: "phone" (default) | "panels" | "spread" | "exact" (ui/board-layout.js)}
 //
 // The panel is drawn as its three sections (deck 1, mixer, deck 2), each a
 // positioned box; a control's x is relative to its section, so the layouts
@@ -24,6 +24,9 @@
 // zone holds it (hitMap: grown past the drawn part, split by nearest centre),
 // so a thumb that lands near a small button presses it.
 //
+// "phone" (default): the strip is a slim band on top (caixa at its left end,
+// Beat FX and REC at its right end), the decks re-proportioned for a phone
+// (board-layout.js phoneDeck), the mixer as on the panel.
 // "panels": the two gaps beside the mixer are panelSlots() (screen CSS px);
 // panels() gives their two elements (Task V2 draws the deck panels in them).
 // Until then the left one holds the caixa button and the right one REC
@@ -47,7 +50,7 @@ import {
 } from "../flx4-map.js";
 import { Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever, TouchRouter } from "./controls.js";
 import {
-  fitBoard, sectionOf, placeControls, hitMap, legendPlan, panelSlots, SECTIONS, LAYOUT, LAYOUTS, BIG_KINDS,
+  fitBoard, sectionOf, placeControls, hitMap, legendPlan, panelSlots, faderCap, SECTIONS, LAYOUT, LAYOUTS, BIG_KINDS,
 } from "./board-layout.js";
 
 export const NOT_YET_MS = 1200;
@@ -451,6 +454,14 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         left: `${(d.x - sec.left).toFixed(2)}px`, top: `${d.y.toFixed(2)}px`,
         width: `${d.w.toFixed(2)}px`, height: `${d.h.toFixed(2)}px`,
       });
+      if (c.kind === "fader" || c.kind === "xfader") {
+        // the cap as the layout drew it (phone: the tempo box is not the photo's)
+        const cap = faderCap(f, c, d), cw = (cap.w / d.w) * 100, ch = (cap.h / d.h) * 100;
+        el.style.setProperty("--cap-w", `${cw.toFixed(3)}%`); el.style.setProperty("--cap-h", `${ch.toFixed(3)}%`);
+        el.style.setProperty("--cap-w-half", `${(cw / 2).toFixed(3)}%`); el.style.setProperty("--cap-h-half", `${(ch / 2).toFixed(3)}%`);
+        const w = widgets.get(c.id);
+        if (w && w.setCap) w.setCap({ w: cap.w / d.w, h: cap.h / d.h });
+      }
     }
     placeLegends(f, drawn);
     const slots = panelSlots(f);
@@ -504,6 +515,12 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   on(document, "visibilitychange", () => {
     if (document.hidden) for (const w of widgets.values()) w.release();
   });
+
+  // Chrome on Android moves a touch onto the nearest "clickable" element within
+  // the finger's radius (touch adjustment): with no click listener the board
+  // was not one, so a tap on the deck's top edge went to caixa in the band.
+  // A no-op click listener makes the board a target of its own.
+  on(board, "click", () => {});
 
   const toCrate = () => { if (opts.onCrate) opts.onCrate(); };
   on(caixa, "click", toCrate);

@@ -250,12 +250,18 @@ export class Fader extends Control {
     return this.spec.dir === "right";
   }
 
+  /** The cap's share of the box {w, h} (0..1), when the layout drew the box
+   *  in other proportions than the photo's (the phone layout's tempo). */
+  setCap(ratio) {
+    this.capRatio = ratio || null;
+  }
+
   /** Travel in px: the element's length minus the cap's (both drawn). */
   travelPx() {
     const r = this.el.getBoundingClientRect();
-    const s = this.spec;
-    if (this.horizontal) return r.width * (1 - (s.cap && s.w ? s.cap.w / s.w : 0));
-    return r.height * (1 - (s.cap && s.h ? s.cap.h / s.h : 0));
+    const s = this.spec, k = this.capRatio;
+    if (this.horizontal) return r.width * (1 - (k ? k.w : s.cap && s.w ? s.cap.w / s.w : 0));
+    return r.height * (1 - (k ? k.h : s.cap && s.h ? s.cap.h / s.h : 0));
   }
 
   set(v) {
