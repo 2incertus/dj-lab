@@ -6,6 +6,7 @@ import { CONTROLS, INDICATORS, LEGENDS } from "../flx4-map.js";
 import {
   fitBoard, placeControls, hitMap, edgeDistance, panelSlots, fitText, textWidth, legendPlan, LAYOUT, LAYOUTS, XFADER_CLEAR_PX,
   SAFE_FALLBACK, HIT_MIN_PX, BUTTON_MIN_PX, KNOB_MIN_PX, PAD_GAP_PX, LEGEND_MIN_PX, PANELS_TOP_PX, BIG_KINDS, LEVER_MIN_PX,
+  PHONE, faderCap,
 } from "../ui/board-layout.js";
 
 const byId = new Map(CONTROLS.map((c) => [c.id, c]));
@@ -289,8 +290,18 @@ test("legends_fit_at_six_px_or_more", () => {
 // ---- the "phone" layout (Task V1b) ---------------------------------------------------
 
 const deckIds = (n) => CONTROLS.filter((c) => c.section === "deck" && c.deck === n);
-/** Targets per viewport: hit zones, drawn buttons (short side), pads. */
-const TARGETS = { "844x390": { zone: 44, button: 32, pad: 46 }, "844x330": { zone: 38, button: 28, pad: 28 } };
+/** Targets per viewport (Cabine v3, Task V3: "deck buttons should be bigger on
+ *  mobile"): hit zones, drawn buttons (short side), CUE and PLAY, pads (short
+ *  side), the jog's floor, the tempo fader's travel. */
+const TARGETS = {
+  "844x390": { zone: 48, button: 44, cue: 52, pad: 52, jog: 100, travel: 180 },
+  "844x330": { zone: 44, button: 40, cue: 46, pad: 44, jog: 88, travel: 150 },
+};
+const LOOP_ROW = ["in", "out", "4beat", "call-prev", "call-next", "sync"];
+/** At 844 x 390 the deck is too narrow for two of them (test
+ *  phone_390_shortfalls_are_the_decks_width): the loop row's zones are as wide
+ *  as a sixth of the deck, the pads as wide as the deck leaves them. */
+const WIDTH_LIMITED = { "844x390": { loopZoneW: (Wd) => Wd / 6 - 0.5, padW: 45.9 } };
 
 test("phone_is_the_default_band_on_top_decks_widened_mixer_centred", () => {
   assert.equal(LAYOUT, "phone");
@@ -310,7 +321,8 @@ test("phone_is_the_default_band_on_top_decks_widened_mixer_centred", () => {
     assert.ok(Math.abs(mx.width - 0.32 * fit.height * 1.805) < EPS, `${tag}: mixer ${mx.width}`);
     assert.ok(Math.abs(mx.left + mx.width / 2 - fit.width / 2) < EPS, `${tag}: mixer centred`);
     assert.equal(d1.left, 0);
-    assert.ok(Math.abs(d1.width - (mx.left - 6)) < EPS && Math.abs(d2.left - (mx.left + mx.width + 6)) < EPS, `${tag}: deck gaps`);
+    assert.ok(Math.abs(d1.width - (mx.left - PHONE.deckGap)) < EPS && Math.abs(d2.left - (mx.left + mx.width + PHONE.deckGap)) < EPS, `${tag}: deck gaps`);
+    assert.ok(PHONE.deckGap >= 2, "the decks stay apart from the mixer");
     assert.ok(Math.abs(d2.left + d2.width - fit.width) < EPS && Math.abs(d1.width - d2.width) < EPS, `${tag}: decks`);
     assert.ok(d1.width > 0.34 * fit.height * 1.805 * 1.2, `${tag}: decks wider than the photo's`);
   }
@@ -348,8 +360,10 @@ test("phone_decks_keep_the_flx4_topology", () => {
       assert.ok(Math.abs(pads[4].y - bottom(pads[0]) - 4) < EPS, `${tag}: 4 px between pad rows`);
       assert.ok(Math.min(...modes.map((m) => m.y)) >= bottom(jog) - EPS, `${tag}: mode row under the jog`);
       for (const p of pads) {
+        // square-ish: at 844 x 390 a little taller than wide (CUE and PLAY are
+        // as tall as a pad row and its gap)
         const a = p.w / p.h;
-        assert.ok(a >= 1 - EPS && a <= 1.4 + EPS, `${tag}: pad aspect ${a}`);
+        assert.ok(a >= 0.9 - EPS && a <= 1.4 + EPS, `${tag}: pad aspect ${a}`);
       }
       // the tempo fader at the deck's right edge (the outer edge of deck 2), right of the pads
       const t = g("tempo");
@@ -363,18 +377,106 @@ test("phone_decks_keep_the_flx4_topology", () => {
 
 test("phone_meets_the_targets_in_the_decks", () => {
   for (const vp of VIEWPORTS.filter((v) => TARGETS[v.tag])) {
-    const T = TARGETS[vp.tag];
-    const { drawn, map } = geometry(vp, "phone");
+    const T = TARGETS[vp.tag], lim = WIDTH_LIMITED[vp.tag] || {};
+    const { fit, drawn, map } = geometry(vp, "phone");
+    const Wd = fit.sections[0].width;
     for (const n of [1, 2]) {
       for (const c of deckIds(n)) {
         const d = drawn.get(c.id);
+        const id = c.id.slice(3);
         const tag = `${vp.tag}: ${c.id}`;
-        if (isBig(c)) continue;
+        if (c.kind === "jog") {
+          assert.ok(d.w >= T.jog - EPS && Math.abs(d.w - d.h) < EPS && d.shape === "circle", `${tag} ${d.w.toFixed(1)} px`);
+          continue;
+        }
+        if (c.kind === "fader") {
+          const travel = d.h - faderCap(fit, c, d).h;
+          assert.ok(travel >= T.travel - EPS, `${tag} travel ${travel.toFixed(1)}`);
+          continue;
+        }
         const e = map.extent(c.id);
-        assert.ok(e.w >= T.zone - 0.5 && e.h >= T.zone - 0.5, `${tag} zone ${e.w.toFixed(1)} x ${e.h.toFixed(1)}`);
+        const zw = LOOP_ROW.includes(id) && lim.loopZoneW ? Math.min(T.zone, lim.loopZoneW(Wd)) : T.zone;
+        assert.ok(e.w >= zw - 0.5 && e.h >= T.zone - 0.5, `${tag} zone ${e.w.toFixed(1)} x ${e.h.toFixed(1)}`);
         const short = Math.min(d.w, d.h);
-        if (c.kind === "pad") assert.ok(short >= T.pad - EPS, `${tag} pad ${short.toFixed(1)}`);
-        else assert.ok(short >= T.button - EPS, `${tag} drawn ${short.toFixed(1)}`);
+        if (c.kind === "pad") {
+          assert.ok(short >= Math.min(T.pad, lim.padW || Infinity) - EPS, `${tag} pad ${d.w.toFixed(1)} x ${d.h.toFixed(1)}`);
+          assert.ok(d.h >= Math.min(T.pad, T.cue - (PHONE.padGap - 2)) - EPS, `${tag} pad height ${d.h.toFixed(1)}`);
+        } else if (id === "cue" || id === "play") {
+          assert.ok(short >= T.cue - EPS, `${tag} drawn ${short.toFixed(1)}`);
+        } else {
+          assert.ok(short >= T.button - EPS, `${tag} drawn ${short.toFixed(1)}`);
+        }
+      }
+    }
+  }
+});
+
+test("phone_390_shortfalls_are_the_decks_width", () => {
+  // 844 x 390: the mixer keeps the panel's proportions and the decks get what
+  // is left. Six loop buttons 48 px apart, or a 52 px CUE column beside four
+  // 52 px pads and the narrowest tempo fader, do not fit in that width; the
+  // layout gets as close as it can and gives the pads all that is left.
+  const vp = VIEWPORTS[0], T = TARGETS[vp.tag];
+  const { fit, drawn } = geometry(vp, "phone");
+  const Wd = fit.sections[0].width;
+  assert.ok(6 * T.zone > Wd, `loop zones: 6 x ${T.zone} vs ${Wd.toFixed(1)}`);
+  const needed = T.cue + 4 * T.pad + 3 * PHONE.padGap + PHONE.tempoMin + 2 * PHONE.gap + 2 * PHONE.edge;
+  assert.ok(needed > Wd, `pads: ${needed} vs ${Wd.toFixed(1)}`);
+  const pad = drawn.get("d1-pad1"), cue = drawn.get("d1-cue"), t = drawn.get("d1-tempo");
+  const left = Wd - 2 * PHONE.edge - 2 * PHONE.gap - 3 * PHONE.padGap - t.w - cue.w;
+  assert.ok(Math.abs(pad.w - left / 4) < 1e-6, `the pads take the rest: ${pad.w} vs ${left / 4}`);
+  assert.equal(t.w, PHONE.tempoMin, "the tempo fader at its narrowest");
+  // the loop row fills the deck's width: each zone is a sixth of it
+  const { map } = geometry(vp, "phone");
+  for (const id of LOOP_ROW) assert.ok(map.extent(`d1-${id}`).w >= Wd / 6 - 1, id);
+  // SYNC sits clear of the tempo fader's edge (2 px or more), left of it
+  const sync = drawn.get("d1-sync");
+  assert.ok(t.x - (sync.x + sync.w / 2) >= 2 - 1e-9 || sync.x + sync.w / 2 - t.x >= 2, "SYNC's centre off the tempo's edge");
+});
+
+test("phone_deck_legends_sit_on_their_buttons", () => {
+  // Task V3: no legend rows in a phone deck. A button's own legends (its name,
+  // its face, its SHIFT legend) print on the button; 1/2X and 2X on the CALL
+  // buttons; nothing under 7 px. The rest (CUE/LOOP CALL, TEMPO and its
+  // marks) sits in room no row needs.
+  const free = ["CUE/LOOP", "CALL", "\u2212", "0", "+"];
+  for (const vp of VIEWPORTS) {
+    const { fit, drawn } = geometry(vp, "phone");
+    const plan = legendPlan(fit, drawn);
+    const inside = (l, d) => {
+      if (d.shape !== "circle") return l.x >= d.x - EPS && l.x + l.w <= d.x + d.w + EPS && l.y >= d.y - EPS && l.y + l.h <= d.y + d.h + EPS;
+      const r = d.w / 2, cx = d.x + r, cy = d.y + r;
+      return [[l.x, l.y], [l.x + l.w, l.y], [l.x, l.y + l.h], [l.x + l.w, l.y + l.h]].every(([x, y]) => Math.hypot(x - cx, y - cy) <= r + EPS);
+    };
+    let n = 0;
+    for (const l of plan) {
+      if (l.hidden || !l.section.startsWith("deck")) continue;
+      const tag = `${vp.tag}: ${l.key} "${l.text}"`;
+      assert.ok(l.px >= 7 - EPS, `${tag} at ${l.px.toFixed(2)} px`);
+      assert.ok(l.fits, `${tag} does not fit`);
+      const owner = l.owner ? byId.get(l.owner) : null;
+      if (owner && owner.kind === "fader") continue;                 // TEMPO, beside its fader
+      if (!owner && free.includes(LEGENDS[+l.key.split(":")[1]].text)) continue;
+      const on = owner ? l.owner : l.on;
+      assert.ok(on, `${tag}: a legend of its own`);
+      if (l.part === "face") {
+        // the face's room is on the part; its lines fit the room
+        const d = drawn.get(on);
+        assert.ok(l.x >= d.x - EPS && l.x + l.w <= d.x + d.w + EPS && l.y >= d.y - EPS && l.y + l.h <= d.y + d.h + EPS, `${tag} room`);
+        continue;
+      }
+      assert.ok(inside(l, drawn.get(on)), `${tag} not on ${on}: ${JSON.stringify([l.x, l.y, l.w, l.h])}`);
+      n++;
+    }
+    assert.ok(n >= 2 * 14, `${vp.tag}: ${n} legends on deck buttons`);
+    // 1/2X and 2X on the CALL buttons, the SHIFT legends on their buttons
+    for (const d of [1, 2]) {
+      for (const [text, id] of [["1/2X", "call-prev"], ["2X", "call-next"]]) {
+        assert.ok(plan.some((l) => l.text === text && l.on === `d${d}-${id}`), `${vp.tag}: ${text} on d${d}-${id}`);
+      }
+      for (const id of ["in", "out", "4beat", "sync", "mode-hotcue", "mode-padfx1", "mode-beatjump", "mode-sampler"]) {
+        const l = plan.find((x) => x.key === `d${d}-${id}:sub`);
+        assert.ok(l && !l.hidden && l.side === "in", `${vp.tag}: d${d}-${id} SHIFT legend on the button`);
       }
     }
   }

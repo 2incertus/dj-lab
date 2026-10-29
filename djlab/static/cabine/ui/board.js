@@ -420,13 +420,18 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       }
       st.width = `${l.w.toFixed(2)}px`;
       st.height = `${l.h.toFixed(2)}px`;
-      st.lineHeight = `${l.h.toFixed(2)}px`;
+      // a name set on two lines on its button (phone decks: 4 BEAT/ EXIT)
+      st.lineHeight = `${(l.lines.length > 1 ? l.px : l.h).toFixed(2)}px`;
       st.bottom = "auto"; st.margin = "0"; st.transform = "none"; st.textAlign = "center"; st.padding = "0";
       el.dataset.side = l.side;
       el.classList.toggle("cab-board-sub-in", l.part === "sub" && l.side === "in");
+      // phone decks (Task V3): a legend printed on its button (1/2X and 2X are
+      // the section's, printed on the CALL button named in data-on)
+      el.classList.toggle("cab-board-in", l.side === "in");
+      if (l.on) el.dataset.on = l.on; else delete el.dataset.on;
       const c = l.owner ? byId.get(l.owner) : null;
       const icon = c && c.phones && l.part === "label" && l.icon !== false ? PHONES_ICON : "";
-      const html = icon + esc(l.text);
+      const html = icon + l.lines.map(esc).join("<br>");
       if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
     }
     return plan;

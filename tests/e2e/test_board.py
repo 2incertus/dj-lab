@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-SHOTS = Path.home() / "cabine-shots" / "v2"
+SHOTS = Path.home() / "cabine-shots" / "v3"
 XFADER_CLEAR_PX = 34
 # the iPhone's left inset when the Dynamic Island is on the left: more than the
 # 47 px fallback, so the test proves the inset is read, not just the fallback
@@ -275,13 +275,16 @@ def _check_legends(page, g, phone):
         .filter(el => !el.hidden && el.offsetParent !== null && el.textContent.trim())
         .map(el => { const r = el.getBoundingClientRect(), ctl = el.closest('.cab-board-ctl');
             return {text: el.textContent.trim(), face: el.classList.contains('cab-board-face'),
-                    owner: ctl ? ctl.dataset.id : null, sec: el.closest('[data-sec]').dataset.sec,
+                    owner: ctl ? ctl.dataset.id : el.dataset.on || null, sec: el.closest('[data-sec]').dataset.sec,
                     l: r.left, t: r.top, r: r.right, b: r.bottom,
                     px: parseFloat(getComputedStyle(el).fontSize), over: el.scrollWidth - el.clientWidth}; })""")
     assert len(legs) > 80, len(legs)
     tag = f"{phone['name']} {phone['layout']}"
     for a in legs:
         assert a["px"] >= 6 - 0.01, f"{tag}: '{a['text']}' at {a['px']} px"
+        if phone["layout"] == "phone" and a["sec"] != "mixer":
+            # Task V3: nothing in a phone deck under 7 px
+            assert a["px"] >= 7 - 0.01, f"{tag}: deck legend '{a['text']}' at {a['px']} px"
         if a["face"]:
             continue
         sec = g["secs"][a["sec"]]
@@ -296,6 +299,7 @@ def _check_legends(page, g, phone):
             ov = min(a["r"], b["r"]) - max(a["l"], b["l"]), min(a["b"], b["b"]) - max(a["t"], b["t"])
             assert ov[0] <= 0.5 or ov[1] <= 0.5, f"{tag}: '{a['text']}' over '{b['text']}'"
         for cid, d in g["drawn"].items():
+            # (a legend's owner: its part, or for 1/2X and 2X the CALL button it is printed on)
             if cid == a["owner"] or (a["owner"] is None and g["kinds"][cid] == "fader"):
                 continue
             # the box against the part (a disc for the round ones), 0.5 px slack
@@ -344,8 +348,9 @@ def test_tap_beside_a_small_button_presses_it(name, chromium, webkit, base_url, 
                 crowded.append(cid)
         # a button with another part (or the section edge) within ~12 px on every
         # side has no empty side to probe (pad mode buttons, BEAT, the CUEs
-        # between their knobs and faders): the rest, most of them, all answer
-        assert len(probes) >= len(small) * 0.6, (len(probes), len(small), crowded)
+        # between their knobs and faders; since Task V3 the phone decks' loop
+        # row, drawn nearly as big as its zones): the rest all answer
+        assert len(probes) >= len(small) * 0.5, (len(probes), len(small), crowded)
         for cid, (x, y) in probes.items():
             page.touchscreen.tap(x, y)
             assert took(page) == [cid], f"{name}: 10 px beside {cid} at ({x:.1f}, {y:.1f})"
@@ -684,22 +689,33 @@ def test_panels_keep_caixa_rec_and_browse(name, chromium, webkit, base_url, auth
         ctx.close()
 
 
-PHONE_TARGETS = {"iphone-webkit": 44, "iphone-safari-webkit": 38}
+# Task V3 (deck buttons bigger on mobile): per viewport, every deck hit zone,
+# drawn buttons (short side), CUE and PLAY, pads (short side), the jog. At
+# 844 x 390 the deck is too narrow for two of them (board-layout.test.js
+# phone_390_shortfalls_are_the_decks_width): the loop row's zones are a sixth
+# of the deck wide, the pads as wide as the deck leaves them.
+PHONE_TARGETS = {
+    "iphone-webkit": {"zone": 48, "loop_zone": 46, "button": 44, "cue": 52, "pad": 46, "jog": 100},
+    "iphone-safari-webkit": {"zone": 44, "loop_zone": 44, "button": 40, "cue": 46, "pad": 44, "jog": 88},
+}
+LOOP_ROW = ("in", "out", "4beat", "call-prev", "call-next", "sync")
 
 
 @pytest.mark.parametrize("name", list(PHONE_TARGETS))
 def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, auth_cookie):
-    """The phone layout's decks: every small part answers a touch across at
-    least 44 px (844 x 390) or 38 px (844 x 330) through its centre, both ways,
-    checked with real taps at the zone's far edges."""
+    """The phone layout's decks with the iPhone's 47 px side insets: every
+    small part answers a touch across the target through its centre, both
+    ways, checked with real taps at the zone's far edges; every button, CUE
+    and PLAY, the pads and the jog are drawn at their target size."""
     spec = PHONES[name]
     target = PHONE_TARGETS[name]
     ctx = _context(webkit, "webkit", spec["w"], spec["h"], auth_cookie)
     try:
-        page = _open_board(ctx, base_url, spec["insets"])
+        page = _open_board(ctx, base_url, {"left": 47, "right": 47, "bottom": 21})
         assert page.evaluate("() => window.cabine.board.layoutMode") == "phone"
         g = page.evaluate(GEO)
         page.evaluate(RECORD)
+        boxes = rects(page)
         small = [cid for cid, k in g["kinds"].items() if k not in BIG and g["drawn"][cid]["section"] != "mixer"]
         assert len(small) == 2 * 21
         ext = page.evaluate("""(ids) => { const b = window.cabine.board, geo = ${GEO};
@@ -708,14 +724,25 @@ def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, aut
                 return [id, {l: walk(-1, 0), r: walk(1, 0), t: walk(0, -1), b: walk(0, 1)}]; })); }""".replace("${GEO}", "(" + GEO + ")()"), small)
         for cid in small:
             e, d = ext[cid], g["drawn"][cid]
-            assert e["l"] + e["r"] >= target - 1 and e["t"] + e["b"] >= target - 1, f"{name}: {cid} zone {e}"
+            part = cid[3:]
+            zw = target["loop_zone"] if part in LOOP_ROW else target["zone"]
+            assert e["l"] + e["r"] >= zw - 1 and e["t"] + e["b"] >= target["zone"] - 1, f"{name}: {cid} zone {e}"
+            # drawn, as the page lays it out
+            bx = boxes[cid]
+            short = min(bx["r"] - bx["l"], bx["b"] - bx["t"])
+            want = target["pad"] if g["kinds"][cid] == "pad" else target["cue"] if part in ("cue", "play") else target["button"]
+            assert short >= want - 0.6, f"{name}: {cid} drawn {short:.1f} px"
             # real taps 2 px inside each far edge
             for x, y in ((d["cx"] - e["l"] + 2, d["cy"]), (d["cx"] + e["r"] - 2, d["cy"]),
                          (d["cx"], d["cy"] - e["t"] + 2), (d["cx"], d["cy"] + e["b"] - 2)):
                 page.touchscreen.tap(x, y)
                 assert took(page) == [cid], f"{name}: {cid} at ({x:.1f}, {y:.1f})"
             page.wait_for_timeout(10)
+        for deck in (1, 2):
+            j = boxes[f"d{deck}-jog"]
+            assert j["r"] - j["l"] >= target["jog"] - 0.6 and abs((j["r"] - j["l"]) - (j["b"] - j["t"])) < 0.6, j
         SHOTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(SHOTS / f"phone-deck-targets-{name}-{spec['w']}x{spec['h']}.png"))
         assert not page.errors, page.errors
     finally:
         ctx.close()

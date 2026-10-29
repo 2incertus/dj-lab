@@ -21,7 +21,7 @@ from playwright.sync_api import expect
 pytestmark = pytest.mark.usefixtures("play_tracks")
 
 SHOTS = Path.home() / "cabine-shots" / "task10"
-V2_SHOTS = Path.home() / "cabine-shots" / "v2"
+V2_SHOTS = Path.home() / "cabine-shots" / "v3"          # the phone layout's shots (v3 since Task V3)
 IPHONE_INSETS = {"left": 59, "right": 47, "bottom": 21}
 
 
@@ -481,7 +481,7 @@ def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
 
 @pytest.mark.parametrize("engine,layout,w,h", [
     ("chromium", "phone", 844, 390), ("webkit", "phone", 844, 390), ("webkit", "phone", 844, 330),
-    ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
+    ("chromium", "phone", 760, 360), ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
 def test_strip_layout_and_playing_screenshot(engine, layout, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """The band with two tracks loaded and playing: canvas, caixa at the left
     end, REC (live) at the right end, the waveform lanes between; the browse
@@ -594,15 +594,24 @@ def bright_pixels(page, j):
     return sum(1 for i in range(0, len(data), 3) if data[i] + data[i + 1] + data[i + 2] > 600)
 
 
-@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("chromium", 844, 390)])
+# What the jog display keeps at each jog (Task V3: the jog gave its height to
+# the buttons; at 844 x 330 it is ~88 px and keeps BPM, time and phase).
+JOG_SHOWS = {(844, 390): ("bpm", "time", "phase", "tempo", "tag", "key", "loop"),
+             (844, 330): ("bpm", "time", "phase"),
+             (760, 360): ("bpm", "time", "phase", "tempo", "tag", "key", "loop")}
+
+
+@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("chromium", 844, 390),
+                                        ("chromium", 760, 360)])
 def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """Two tracks playing, deck 2 synced to deck 1: both jog displays show the
-    BPM, the remaining time and the key, SYNC / MASTER and the phase meter."""
+    BPM, the remaining time and the phase meter, and where the jog has room
+    (JOG_SHOWS) the tempo, SYNC / MASTER and the key."""
     browser = chromium if engine == "chromium" else webkit
     ctx = _context(browser, engine, w, h, auth_cookie)
     try:
         a, b = play_tracks["click128_130"], play_tracks["click131"]
-        page = _open(ctx, base_url, carry=(a, b), insets=PHONE_INSETS if engine == "webkit" else None, layout="phone")
+        page = _open(ctx, base_url, carry=(a, b), insets=PHONE_INSETS if w == 844 else None, layout="phone")
         r = load_both(page, a, b)
         tap(page, r, "d1-play")
         tap(page, r, "d2-play")
@@ -624,8 +633,14 @@ def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base
         for k, j in enumerate(js):
             assert j["pe"] == "none", "the display never takes a touch"
             assert abs(j["box"]["w"] - j["jog"]["w"]) < 0.6 and abs(j["box"]["l"] - j["jog"]["l"]) < 0.6, j
-            for item in ("bpm", "time", "phase", "tempo", "tag", "key"):
+            for item in JOG_SHOWS[(w, h)]:
+                if item == "loop":
+                    continue                                  # room for it is checked below, with a loop on
                 assert item in j["shown"], f"deck {k + 1}: {item} at {j['D']} px"
+            # dropped from the end of the priority list, never from the middle
+            order = ["bpm", "time", "phase", "tempo", "tag", "key", "loop"]
+            kept = [i in j["shown"] for i in order]
+            assert False not in kept or not any(kept[kept.index(False):]), j["shown"]
             last = j["last"]
             assert last["bpm"] == "128.00", last                  # deck 2 follows deck 1's 128
             assert re.fullmatch(r"-\d+:\d\d", last["time"]), last
@@ -645,6 +660,7 @@ def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base
         j1 = page.evaluate(JOGS)[0]
         print(f"near the end, looping: {j1['last']}")
         assert j1["last"]["red"] is True and j1["last"]["loop"] == "4", j1["last"]
+        assert ("loop" in j1["shown"]) == ("loop" in JOG_SHOWS[(w, h)]), (j1["D"], j1["shown"])
         assert re.fullmatch(r"-0:[12]\d", j1["last"]["time"]), j1["last"]
         jb = j1["jog"]
         page.screenshot(path=str(V2_SHOTS / f"jog1-last30s-loop-{engine}-{w}x{h}.png"),
