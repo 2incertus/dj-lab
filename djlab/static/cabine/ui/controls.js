@@ -8,7 +8,11 @@
 // held SHIFT plus anything, work at once. pointercancel (and a lost capture)
 // is a release. A finger that slides off keeps driving the widget it started on.
 //
-// env = {now(), setTimeout, clearTimeout} (tests pass a fake clock).
+// env = {now(), setTimeout, clearTimeout} (tests pass a fake clock), and
+// routed: an element (the board's section). A routed widget does not listen on
+// its own (drawn) element: a TouchRouter on that element hands it the touches
+// that land in its hit zone, and the pointer is captured there. After the
+// press everything is the same as a touch on the drawn part.
 
 /** Knob: vertical drag, this many px for the whole sweep (SHIFT does not change it). */
 export const KNOB_SWEEP_PX = 180;
@@ -97,6 +101,8 @@ class Control {
     this.onChange = onChange || (() => {});
     this.env = { ...defaultEnv, ...(env || {}) };
     this.pid = null;
+    /** Where the pointer is captured: the drawn element, or the router's. */
+    this.cap = this.env.routed || el;
     this._h = {
       pointerdown: (e) => this._down(e),
       pointermove: (e) => { if (e.pointerId === this.pid) this.move(e); },
@@ -104,14 +110,14 @@ class Control {
       pointercancel: (e) => this._up(e, true),
       lostpointercapture: (e) => this._up(e, true),
     };
-    for (const [t, fn] of Object.entries(this._h)) el.addEventListener(t, fn);
+    if (!this.env.routed) for (const [t, fn] of Object.entries(this._h)) el.addEventListener(t, fn);
   }
 
   _down(e) {
     if (e.preventDefault) e.preventDefault();
     if (this.pid !== null) return;                     // one pointer per widget
     this.pid = e.pointerId;
-    try { this.el.setPointerCapture(e.pointerId); } catch { /* already gone */ }
+    try { this.cap.setPointerCapture(e.pointerId); } catch { /* already gone */ }
     this.el.classList.add("cab-held");
     if (this.down(e) === false) this._end(e, true);
   }
@@ -125,7 +131,7 @@ class Control {
     const id = this.pid;
     this.pid = null;
     this.el.classList.remove("cab-held");
-    try { if (this.el.hasPointerCapture && this.el.hasPointerCapture(id)) this.el.releasePointerCapture(id); } catch { /* ok */ }
+    try { if (this.cap.hasPointerCapture && this.cap.hasPointerCapture(id)) this.cap.releasePointerCapture(id); } catch { /* ok */ }
     this.up(e, cancelled);
   }
 
@@ -136,7 +142,7 @@ class Control {
 
   destroy() {
     this.release();
-    for (const [t, fn] of Object.entries(this._h)) this.el.removeEventListener(t, fn);
+    if (!this.env.routed) for (const [t, fn] of Object.entries(this._h)) this.el.removeEventListener(t, fn);
   }
 
   down() {}
@@ -405,5 +411,47 @@ export class Jog extends Control {
     delete this.el.dataset.zone;
     if (this._zone === "plate") this.onChange({ touch: false });
     this._zone = null;
+  }
+}
+
+/** Hands touches on `el` (a board section) to routed widgets: resolve(e) says
+ *  whose hit zone the touch is in (or null). The pointer stays that widget's,
+ *  captured on `el`, until it lifts, is cancelled or loses its capture; a
+ *  widget already held ignores a second finger, as on its own element. */
+export class TouchRouter {
+  constructor(el, resolve) {
+    this.el = el;
+    this.owners = new Map();                           // pointerId -> widget
+    const end = (cancelled) => (e) => {
+      const w = this.owners.get(e.pointerId);
+      if (!w) return;
+      this.owners.delete(e.pointerId);
+      w._up(e, cancelled);
+    };
+    this._h = {
+      pointerdown: (e) => {
+        if (e.target !== undefined && e.target !== el) return;    // a big part's own element
+        if (e.preventDefault) e.preventDefault();
+        const w = resolve(e);
+        if (!w || w.pid !== null) return;
+        this.owners.set(e.pointerId, w);
+        w._down(e);
+        if (w.pid !== e.pointerId) this.owners.delete(e.pointerId);
+      },
+      pointermove: (e) => {
+        const w = this.owners.get(e.pointerId);
+        if (w && w.pid === e.pointerId) w.move(e);
+      },
+      pointerup: end(false),
+      pointercancel: end(true),
+      lostpointercapture: end(true),
+    };
+    for (const [t, fn] of Object.entries(this._h)) el.addEventListener(t, fn);
+  }
+
+  destroy() {
+    for (const w of this.owners.values()) w.release();
+    this.owners.clear();
+    for (const [t, fn] of Object.entries(this._h)) this.el.removeEventListener(t, fn);
   }
 }

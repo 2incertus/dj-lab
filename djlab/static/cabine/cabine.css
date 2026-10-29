@@ -262,6 +262,34 @@ html, body, .cab-root { touch-action: manipulation; }
 }
 .cab-board-caixa:focus-visible, .cab-turn-caixa:focus-visible { outline: 2px solid #ff9d3c; outline-offset: 2px; }
 
+/* panels layout (Cabine v2): no strip band. The two gaps beside the mixer are
+   the panel slots (Task V2 draws the deck panels there); until then the left
+   holds caixa, the right REC, and the strip shows over deck 1 only while its
+   browse list is open. */
+.cab-board-panel { position: absolute; display: none; pointer-events: none; }
+.cab-board-panel > * { pointer-events: auto; }
+/* panels: the gaps are not panel; the mixer gets its own plate */
+.cab-board[data-layout="panels"] { background: transparent; box-shadow: none; }
+.cab-board[data-layout="panels"] .cab-board-sec { box-shadow: 0 0 0 1px #000, 0 calc(var(--u) * 0.8) calc(var(--u) * 3) #000a; }
+.cab-board[data-layout="panels"] .cab-board-sec-mixer { background: #2a2a2b; border-radius: calc(var(--u) * 1.2); }
+.cab-board-screen[data-mode="panels"] .cab-board-panel { display: block; }
+.cab-board-screen.cab-portrait .cab-board-panel { display: none; }
+.cab-board-screen[data-mode="panels"] .cab-board-caixa {
+  left: 2px; right: 2px; top: 0; min-height: 44px; max-width: 72px; margin: 0 auto;
+  padding: 0; font-size: 9px; letter-spacing: 0.02em;
+}
+.cab-board-rechost { position: absolute; left: 2px; right: 2px; top: 0; max-width: 72px; margin: 0 auto; }
+.cab-board-rechost .cab-strip-rec { position: static; display: block; width: 100%; height: 44px; }
+.cab-board-screen[data-mode="panels"] .cab-board-strip {
+  visibility: hidden; z-index: 6; border-radius: 8px; border: 1px solid #2a2a2e; box-shadow: 0 6px 24px #000c;
+}
+.cab-board-screen[data-mode="panels"] .cab-board-strip:has(.cab-strip-browse:not([hidden])) { visibility: visible; }
+/* there the list is all it shows (the lanes and meters are the panels' job, Task V2) */
+.cab-board-screen[data-mode="panels"] .cab-strip-canvas { visibility: hidden; }
+.cab-board-screen[data-mode="panels"] .cab-strip-browse {
+  left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; border: 0;
+}
+
 /* the strip's contents (Task 10, ui/strip.js): canvas, browse list, REC */
 .cab-board-strip .cab-board-strip-slot { position: relative; overflow: hidden; border-radius: 0 0 8px 8px; }
 .cab-strip-canvas { position: absolute; left: 0; top: 0; display: block; pointer-events: none; }
@@ -321,11 +349,18 @@ html, body, .cab-root { touch-action: manipulation; }
   border: 1px solid #7d7d7d; border-radius: 2px; padding: 0.15em 0.25em 0.05em;
 }
 .cab-board-sub-plain { border: 0; padding: 0; font-size: min(var(--fs), calc(var(--u) * var(--k, 99))); color: #cfcfcf; }
+/* a SHIFT legend that had to come onto its part (the pad mode buttons): plain, dim */
+.cab-board-sub.cab-board-sub-in { border: 0; padding: 0; color: #9c9c9c; z-index: 4; }
 .cab-board-phones { width: 1.25em; height: 1em; vertical-align: -0.12em; margin-right: 0.15em; }
 
-/* every control: the element itself is the touch target */
+/* every control: the jog and the faders are their own touch target; the small
+   parts are drawn only, their section hands them the touches in their hit
+   zone (board.js, TouchRouter). The jog's disc (border-radius) is its target,
+   so its box's corners fall through to the section. */
 .cab-board-ctl { position: absolute; touch-action: none; cursor: pointer; }
 .cab-board-ctl * { pointer-events: none; }
+.cab-board-ctl.cab-routed { pointer-events: none; }
+.cab-board-unfit { outline: 1px dashed #ff4d3d88; }
 .cab-board-face {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
   font-weight: 700; font-size: min(var(--fs), calc(var(--u) * var(--k, 99))); line-height: 0.95; letter-spacing: 0;

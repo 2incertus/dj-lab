@@ -344,14 +344,14 @@ function tick(now) {
   app.engine.fx.refresh();                                       // cheap when nothing changed
 }
 
-/** The FLX4 board over the engine. opts.layout: "spread" | "exact"
+/** The FLX4 board over the engine. opts.layout: "panels" | "spread" | "exact"
  *  (ui/board-layout.js, also ?board=exact); opts.demo: the Task 9 stand-in
  *  bindings (no audio; the board's own e2e tests use them). */
 function showBoard(opts = {}) {
   leave();
   app.screen = "board";
   root.dataset.screen = "board";
-  // "spread" by default; ?board=exact shows the panel at the photo's proportions
+  // "panels" by default; ?board=spread or ?board=exact for comparison
   const layout = opts.layout || new URLSearchParams(location.search).get("board") || undefined;
   if (opts.demo) {
     const demo = makeDemoBindings();
@@ -372,8 +372,10 @@ function showBoard(opts = {}) {
   canvas.setAttribute("aria-hidden", "true");
   app.board.stripSlot.appendChild(canvas);
   const caixa = app.board.el.querySelector(".cab-board-caixa");
-  app.strip = new Strip(canvas, { store: app.store, reserveLeft: () => (caixa ? caixa.offsetWidth + 8 : 0),
-    watch: caixa ? [caixa] : [] });
+  // the caixa button sits on the strip band, or (panels) in the left panel slot
+  app.strip = new Strip(canvas, { store: app.store,
+    reserveLeft: () => (caixa && caixa.closest(".cab-board-strip") ? caixa.offsetWidth + 8 : 0),
+    watch: caixa ? [caixa] : [], recHost: app.board.recHost });
   if (app.engine) {
     app.strip.setEngine(app.engine);
     app.engine.decks.forEach((d, i) => { if (d.state.loaded && d.track) app.strip.setTrack(i, d.track); });

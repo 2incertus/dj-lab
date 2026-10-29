@@ -2,18 +2,32 @@
 // each to a touch widget (ui/controls.js) and routes it to an action.
 //
 // renderBoard(root, CONTROLS, bindings, opts) -> {setLit, setBlink, setMark,
-//   setLatch, setLevel, notYet, padMode, shift, widget, stripSlot, destroy}
+//   setLatch, setLevel, notYet, padMode, shift, widget, stripSlot, recHost,
+//   panelSlots, panels, hitTest, destroy}
 //   bindings  {"deck.cueDown": (value, control) => ..., ...}: the board calls
 //             bindings[action](value, control) for every action that is not
 //             the board's own ("board.*"). control carries deck, index, band,
 //             arg. Missing bindings are skipped. Task 10 binds the engine.
 //   opts      {onCrate(): the "caixa" button, onPadMode(deck, mode),
-//              layout: "spread" (default) | "exact" (ui/board-layout.js)}
+//              layout: "panels" (default) | "spread" | "exact" (ui/board-layout.js)}
 //
 // The panel is drawn as its three sections (deck 1, mixer, deck 2), each a
-// positioned box; a control's x is relative to its section, so the "spread"
-// layout can move the sections apart while every part inside keeps the
-// photo's position and size.
+// positioned box; a control's x is relative to its section, so the layouts
+// can move the sections apart while every part inside keeps the photo's
+// centre. Sizes are px, from board-layout.js: small parts drawn bigger than
+// the photo (placeControls), legends sized and placed around them
+// (legendPlan), all set again on every resize.
+//
+// Touch: the jog, the faders and the crossfader take touches on their own
+// element. Every other part is drawn with pointer-events: none; its section
+// answers for it (a TouchRouter) and hands each touch to the part whose hit
+// zone holds it (hitMap: grown past the drawn part, split by nearest centre),
+// so a thumb that lands near a small button presses it.
+//
+// "panels": the two gaps beside the mixer are panelSlots() (screen CSS px);
+// panels() gives their two elements (Task V2 draws the deck panels in them).
+// Until then the left one holds the caixa button and the right one REC
+// (recHost); the strip (browse list) shows over deck 1 while the list is open.
 //
 // The board itself owns three things, as the hardware does:
 // - SHIFT, per deck and held (it also sends deck.setShift, so the deck can
@@ -31,8 +45,10 @@
 import {
   CONTROLS as ALL_CONTROLS, INDICATORS, LEGENDS, PAD_MODES, DEFAULT_PAD_MODE, BOARD_ASPECT,
 } from "../flx4-map.js";
-import { Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever } from "./controls.js";
-import { fitBoard, sectionOf, SECTIONS, LAYOUT, LAYOUTS } from "./board-layout.js";
+import { Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever, TouchRouter } from "./controls.js";
+import {
+  fitBoard, sectionOf, placeControls, hitMap, legendPlan, panelSlots, SECTIONS, LAYOUT, LAYOUTS, BIG_KINDS,
+} from "./board-layout.js";
 
 export const NOT_YET_MS = 1200;
 export const NOT_YET_TEXT = "not yet";
@@ -92,6 +108,7 @@ function controlHtml(c) {
   if (c.lightColour) cls.push(`cab-light-${c.lightColour}`);
   if (c.v1 === false) cls.push("cab-drawn-only");
   if (c.deck) cls.push(`cab-deck${c.deck}`);
+  if (!BIG_KINDS.includes(c.kind)) cls.push("cab-routed");
   let inner = "";
   switch (c.kind) {
     case "knob":
@@ -137,7 +154,7 @@ function legendItemHtml(l) {
   if (l.strong) cls.push("cab-board-legend-strong");
   const sec = sectionOf(l.x);
   const left = ((l.x - sec.x0) / (sec.x1 - sec.x0)) * 100;
-  return `<span class="${cls.join(" ")}" style="left:${pct(left)};top:${pct(l.y)};--k:${fitK(l.text, l.tw ?? 4, l.th)}">${esc(l.text)}</span>`;
+  return `<span class="${cls.join(" ")}" data-legend="${LEGENDS.indexOf(l)}" style="left:${pct(left)};top:${pct(l.y)};--k:${fitK(l.text, l.tw ?? 4, l.th)}">${esc(l.text)}</span>`;
 }
 
 /** Everything that sits in one section, as its section's inner HTML. */
@@ -171,6 +188,8 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
         ${sectionsHtml(controls)}
         <div class="cab-board-toast" role="status" aria-live="polite" hidden></div>
       </div>
+      <div class="cab-board-panel" data-panel="1"></div>
+      <div class="cab-board-panel" data-panel="2"><div class="cab-board-rechost"></div></div>
       <div class="cab-turn">
         <p class="cab-turn-kicker">A Cabine</p>
         <h1 class="cab-turn-h">Turn sideways</h1>
@@ -183,12 +202,18 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   const strip = screen.querySelector(".cab-board-strip");
   const probe = screen.querySelector(".cab-board-probe");
   const toast = board.querySelector(".cab-board-toast");
+  const panelEls = [...screen.querySelectorAll(".cab-board-panel")];
+  const caixa = screen.querySelector(".cab-board-caixa");
+  const recHost = screen.querySelector(".cab-board-rechost");
   const byId = new Map(controls.map((c) => [c.id, c]));
   const els = new Map([...board.querySelectorAll("[data-id]")].map((el) => [el.dataset.id, el]));
   const widgets = new Map();
   const secEls = new Map([...board.querySelectorAll("[data-sec]")].map((el) => [el.dataset.sec, el]));
   const mode = LAYOUTS.includes(opts.layout) ? opts.layout : LAYOUT;
   board.dataset.layout = mode;
+  screen.dataset.mode = mode;
+  // panels: the caixa button lives at the top of the left panel slot
+  if (mode === "panels") panelEls[0].appendChild(caixa);
   const state = {
     shift: { 1: false, 2: false },
     padMode: { 1: DEFAULT_PAD_MODE, 2: DEFAULT_PAD_MODE },
@@ -311,23 +336,25 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   for (const c of controls) {
     const el = els.get(c.id);
     if (!el) continue;
+    // small parts answer through their section's router (their hit zone)
+    const env = BIG_KINDS.includes(c.kind) ? undefined : { routed: secEls.get(sectionOf(c.x).key) };
     if (c.v1 === false) {
       // drawn only: a press says "not yet" (SHIFT layers included), nothing moves
-      const w = new Button(el, c, (down) => { if (down) notYet(); });
+      const w = new Button(el, c, (down) => { if (down) notYet(); }, env);
       widgets.set(c.id, w);
       continue;
     }
     let w;
     switch (c.kind) {
-      case "button": w = new Button(el, c, onButton(c)); break;
-      case "pad": w = new Pad(el, c, onPad(c)); break;
-      case "knob": w = new Knob(el, { ...c, value: c.def }, (v) => run(c.action, v, c)); break;
+      case "button": w = new Button(el, c, onButton(c), env); break;
+      case "pad": w = new Pad(el, c, onPad(c), env); break;
+      case "knob": w = new Knob(el, { ...c, value: c.def }, (v) => run(c.action, v, c), env); break;
       case "encoder":
-        w = new Encoder(el, c, (e) => (e.press ? run(c.press, true, c) : run(c.action, e.turn, c)));
+        w = new Encoder(el, c, (e) => (e.press ? run(c.press, true, c) : run(c.action, e.turn, c)), env);
         break;
       case "fader": w = new Fader(el, { ...c, value: c.def }, (v) => run(c.action, v, c)); break;
       case "xfader": w = new XFader(el, { ...c, value: c.def }, (v) => run(c.action, v, c)); break;
-      case "lever": w = new Lever(el, c, (i) => run(c.action, c.positions[i].value, c)); break;
+      case "lever": w = new Lever(el, c, (i) => run(c.action, c.positions[i].value, c), env); break;
       case "jog":
         w = new Jog(el, c, (e) => {
           if ("touch" in e) run(c.touch, e.touch, c);
@@ -345,6 +372,53 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   // ---- layout ----------------------------------------------------------------------
 
   let portrait = null;
+  let geo = null;                                  // {fit, drawn, map, slots}
+  const legendEls = new Map();                     // plan key -> span
+  for (const c of controls) {
+    const el = els.get(c.id);
+    if (!el) continue;
+    const lbl = el.querySelector(":scope > .cab-board-lbl"), sub = el.querySelector(":scope > .cab-board-sub");
+    const face = el.querySelector(":scope > .cab-board-face");
+    if (lbl) legendEls.set(`${c.id}:label`, lbl);
+    if (sub) legendEls.set(`${c.id}:sub`, sub);
+    if (face) legendEls.set(`${c.id}:face`, face);
+  }
+  for (const el of board.querySelectorAll("[data-legend]")) legendEls.set(`legend:${el.dataset.legend}`, el);
+
+  function placeLegends(f, drawn) {
+    for (const l of legendPlan(f, drawn, controls)) {
+      const el = legendEls.get(l.key);
+      if (!el) continue;
+      el.hidden = !!l.hidden;                     // a SHIFT legend v1 has no layer for, and no room
+      if (l.hidden) continue;
+      const owner = l.owner ? drawn.get(l.owner) : null;
+      const sec = f.sections.find((t) => t.key === l.section);
+      const ox = owner ? owner.x : sec.left, oy = owner ? owner.y : 0;
+      const st = el.style;
+      st.left = `${(l.x - ox).toFixed(2)}px`;
+      st.top = `${(l.y - oy).toFixed(2)}px`;
+      st.fontSize = `${l.px.toFixed(2)}px`;
+      if (l.part === "face") {
+        st.right = "auto"; st.bottom = "auto";
+        st.width = `${l.w.toFixed(2)}px`; st.height = `${l.h.toFixed(2)}px`;
+        const html = l.lines.map(esc).join("<br>");
+        if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+        continue;
+      }
+      st.width = `${l.w.toFixed(2)}px`;
+      st.height = `${l.h.toFixed(2)}px`;
+      st.lineHeight = `${l.h.toFixed(2)}px`;
+      st.bottom = "auto"; st.margin = "0"; st.transform = "none"; st.textAlign = "center"; st.padding = "0";
+      el.dataset.side = l.side;
+      el.classList.toggle("cab-board-sub-in", l.part === "sub" && l.side === "in");
+      el.classList.toggle("cab-board-unfit", !l.fits);
+      const c = l.owner ? byId.get(l.owner) : null;
+      const icon = c && c.phones && l.part === "label" && l.icon !== false ? PHONES_ICON : "";
+      const html = icon + esc(l.text);
+      if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+    }
+  }
+
   function layout() {
     const W = window.innerWidth, H = window.innerHeight;
     const isPortrait = H > W;
@@ -354,7 +428,11 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       if (isPortrait) for (const w of widgets.values()) w.release();
     }
     if (isPortrait) return;
-    const f = fitBoard({ W, H, insets: readInsets(probe), mode });
+    const insets = readInsets(probe);
+    // the same screen as last time: nothing moves (iOS fires resize often)
+    const key = `${W}x${H} ${insets.left} ${insets.right} ${insets.top} ${insets.bottom}`;
+    if (geo && geo.key === key) return;
+    const f = fitBoard({ W, H, insets, mode });
     Object.assign(board.style, {
       left: `${f.left}px`, top: `${f.top}px`, width: `${f.width}px`, height: `${f.height}px`,
     });
@@ -364,13 +442,51 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
       el.style.width = `${sec.width}px`;
     }
     board.style.setProperty("--u", `${(f.height / 100).toFixed(4)}px`);
-    Object.assign(strip.style, {
-      left: `${f.safe.left}px`, right: `${f.safe.right}px`, top: `${f.stripTop}px`,
-      height: `${f.stripBottom - f.stripTop}px`,
-    });
+    const drawn = placeControls(f, controls);
+    for (const c of controls) {
+      const el = els.get(c.id), d = drawn.get(c.id);
+      if (!el || !d) continue;
+      const sec = f.sections.find((t) => t.key === d.section);
+      Object.assign(el.style, {
+        left: `${(d.x - sec.left).toFixed(2)}px`, top: `${d.y.toFixed(2)}px`,
+        width: `${d.w.toFixed(2)}px`, height: `${d.h.toFixed(2)}px`,
+      });
+    }
+    placeLegends(f, drawn);
+    const slots = panelSlots(f);
+    geo = { fit: f, drawn, map: hitMap(f, drawn, controls), slots, key };
+    if (mode === "panels") {
+      slots.forEach((r, i) => Object.assign(panelEls[i].style, {
+        left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`,
+      }));
+      // the strip (browse list) shows over the left panel slot and deck 1 while open
+      const d1 = f.sections[0];
+      Object.assign(strip.style, {
+        left: `${f.left + d1.left}px`, width: `${d1.width + slots[0].w}px`, right: "auto",
+        top: `${f.top}px`, height: `${Math.round(f.height * 0.55)}px`,
+      });
+    } else {
+      Object.assign(strip.style, {
+        left: `${f.safe.left}px`, right: `${f.safe.right}px`, width: "auto", top: `${f.stripTop}px`,
+        height: `${f.stripBottom - f.stripTop}px`,
+      });
+    }
     screen.dataset.layout = JSON.stringify({ mode, left: f.left, top: f.top, width: f.width, height: f.height,
       sections: f.sections.map((x) => ({ key: x.key, left: x.left, width: x.width })) });
   }
+
+  /** Which control a touch at client (x, y) goes to (the hit zones), or null. */
+  function hitTest(x, y) {
+    if (!geo) return null;
+    const r = board.getBoundingClientRect();
+    return geo.map.at(x - r.left, y - r.top);
+  }
+
+  const routers = [...secEls.values()].map((el) => new TouchRouter(el, (e) => {
+    const id = hitTest(e.clientX, e.clientY);
+    return id && !BIG_KINDS.includes(byId.get(id).kind) ? widgets.get(id) || null : null;
+  }));
+
   layout();
   on(window, "resize", layout);
   on(window, "orientationchange", layout);
@@ -390,7 +506,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
   });
 
   const toCrate = () => { if (opts.onCrate) opts.onCrate(); };
-  on(screen.querySelector(".cab-board-caixa"), "click", toCrate);
+  on(caixa, "click", toCrate);
   on(screen.querySelector(".cab-turn-caixa"), "click", toCrate);
 
   return {
@@ -403,12 +519,22 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     setLevel,
     notYet,
     stripSlot: strip.querySelector(".cab-board-strip-slot"),
+    /** panels: where REC goes (top of the right panel slot); null in the strip layouts. */
+    recHost: mode === "panels" ? recHost : null,
+    /** The two panel slots, screen CSS px [{x, y, w, h}, ...] (empty gaps outside "panels"). */
+    panelSlots: () => (geo ? geo.slots.map((r) => ({ ...r })) : []),
+    /** The two panel slot elements (Task V2 draws the deck panels in them). */
+    panels: () => panelEls,
+    layoutMode: mode,
+    hitTest,
+    geometry: () => geo,
     padMode: (deck) => state.padMode[deck],
     shift: (deck) => state.shift[deck],
     widget: (id) => widgets.get(id),
     control: (id) => byId.get(id),
     layout,
     destroy() {
+      for (const r of routers) r.destroy();
       for (const w of widgets.values()) w.destroy();
       widgets.clear();
       for (const fn of cleanups) fn();

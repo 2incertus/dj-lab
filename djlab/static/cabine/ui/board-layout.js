@@ -1,34 +1,82 @@
-// A Cabine: where the board goes on the screen (pure, unit-tested).
+// A Cabine: where the board goes on the screen, how big each part is drawn and
+// where each part answers a touch (pure, unit-tested in test/board-layout.test.js
+// and test/flx4-map.test.js).
 //
-// Landscape screen, top to bottom: the strip (the "laptop screen", Task 10
-// draws there), then the board. Nothing interactive goes in the safe areas:
-// the sides (Dynamic Island, rounded corners) and the home indicator at the
-// bottom. env(safe-area-inset-*) gives them on the iPhone; where it reads 0
-// (Android, desktop, the e2e browsers) SAFE_FALLBACK stands in, so the layout
-// is the iPhone's everywhere. The crossfader's hit box must end XFADER_CLEAR_PX
-// above the bottom edge (home indicator plus the swipe-up zone).
+// Landscape screen. Nothing interactive goes in the safe areas: the sides
+// (Dynamic Island, rounded corners) and the home indicator at the bottom.
+// env(safe-area-inset-*) gives them on the iPhone; where it reads 0 (Android,
+// desktop, the e2e browsers) SAFE_FALLBACK stands in, so the layout is the
+// iPhone's everywhere. The crossfader's box must end XFADER_CLEAR_PX above the
+// bottom edge (home indicator plus the swipe-up zone).
 //
 // The panel is three sections side by side, as on the hardware: deck 1, the
 // mixer (with Beat FX and browse), deck 2 (SECTIONS, percent of the panel's
-// width). Two layouts (ruling R23):
-//   "exact"   the whole panel at BOARD_ASPECT, centered: what the photo shows,
-//             with STRIP_SHARE.exact of the height for the strip. On an
-//             844 x 390 iPhone that leaves ~120 px unused at each side.
-//   "spread"  (default) a slimmer strip (two lanes), the sections sized by the
-//             taller height budget, each keeping its own proportions and every
-//             part's size, and the width left over split into the two gaps
-//             between them, so the board spans the whole usable width. Inside a
-//             section every position is the photo's; only the distance between
-//             deck 1, the mixer and deck 2 grows.
-// Both shrink (keeping proportions) until the crossfader clears the bottom.
+// width). Three layouts:
+//   "panels"  (default, Cabine v2) no strip band: the board takes the whole
+//             usable height (PANELS_TOP_PX from the top, down to the bottom
+//             rules), the sections scale uniformly to it, deck 1 at the left
+//             safe edge, deck 2 at the right one, the mixer centred. The two
+//             gaps left over are the panel slots (panelSlots(), CSS px), where
+//             the deck panels go (Task V2).
+//   "spread"  a strip band on top (STRIP_SHARE), the sections sized by the
+//             height left and spread across the whole width (ruling R23).
+//   "exact"   the whole panel at BOARD_ASPECT, centered: what the photo shows.
+// All shrink (keeping proportions) until the crossfader clears the bottom.
+//
+// Drawn sizes (placeControls). Inside a section every part keeps the photo's
+// centre. At phone size the FLX4's buttons are tiny, so small parts grow
+// around their centre: round and small rectangular buttons to BUTTON_MIN_PX on
+// their short side, knobs (and BROWSE) to KNOB_MIN_PX, each never past half
+// the distance to a neighbour's centre (its shape stays on its side of the
+// perpendicular bisector), never into a big part, a meter or out of its
+// section. Pads keep their grid and fill the deck's pad area with PAD_GAP_PX
+// gaps. The jog, the faders and the crossfader keep their box.
+//
+// Hit zones (hitMap). Every small part answers a touch in a zone larger than
+// what is drawn: its drawn box grown by HIT_MARGIN_PX each side and to at least
+// HIT_MIN_PX square, clamped to its section. Where two zones meet, the point
+// goes to the nearer part, measured to what is drawn (for two parts of one
+// size, the Voronoi split of their centres); a touch on a drawn part is that
+// part's. The jog (its disc), the faders and
+// the crossfader keep their drawn box as their zone and no zone enters them.
+// board.js resolves a touch on the section with at(x, y) and hands it to the
+// widget, which keeps the pointer captured as before.
+//
+// Legends (legendPlan). Each printed legend gets a size (never under
+// LEGEND_MIN_PX; where the text cannot fit, the hardware's short form from
+// SHORT) and a place: a label above its part, a SHIFT legend under it, or, when
+// a grown part leaves no room there, beside it on the side away from the
+// section's middle.
 
-import { BOARD_ASPECT, CONTROLS } from "../flx4-map.js";
+import { BOARD_ASPECT, CONTROLS, INDICATORS, LEGENDS } from "../flx4-map.js";
 
-export const LAYOUT = "spread";
-export const LAYOUTS = ["exact", "spread"];
-export const STRIP_SHARE = { exact: 0.22, spread: 0.12 };
+export const LAYOUT = "panels";
+export const LAYOUTS = ["panels", "spread", "exact"];
+export const STRIP_SHARE = { exact: 0.22, spread: 0.12, panels: 0 };
 export const SAFE_FALLBACK = { side: 47, bottom: 21 };
 export const XFADER_CLEAR_PX = 34;
+/** panels: the board's distance from the top edge (no strip above it). */
+export const PANELS_TOP_PX = 6;
+/** Every small control answers a touch at least this big (Apple's 44 pt). */
+export const HIT_MIN_PX = 44;
+/** ...and at least this far past its drawn edge, where there is room. */
+export const HIT_MARGIN_PX = 12;
+/** Drawn minimums: round and small rectangular buttons (short side), knobs. */
+export const BUTTON_MIN_PX = 28;
+export const KNOB_MIN_PX = 30;
+/** A rectangular button's long side grows with it, up to this. */
+export const BUTTON_LONG_MAX_PX = 36;
+/** ...and never past this many times its short side (a part kept narrow by
+ *  its neighbours does not turn into a tall bar). */
+export const BUTTON_ASPECT_MAX = 1.3;
+/** CH SELECT lever: a slide switch, not a button. */
+export const LEVER_MIN_PX = 20;
+export const PAD_GAP_PX = 3;
+/** Space kept between two grown parts, and between a part and a big one. */
+export const DRAW_GAP_PX = 2;
+export const LEGEND_MIN_PX = 6;
+/** The big continuous controls: their drawn box is their zone. */
+export const BIG_KINDS = ["jog", "fader", "xfader"];
 /** The panel's sections, percent of its width (deck plates end at 34 / 66 % in the figure). */
 export const SECTIONS = [
   { key: "deck1", x0: 0, x1: 34 },
@@ -48,7 +96,7 @@ export function sectionOf(x) {
 /**
  * @param W, H     viewport in CSS px (landscape)
  * @param insets   {left, right, bottom, top}: env(safe-area-inset-*) values
- * @param mode     "spread" (default) | "exact"
+ * @param mode     "panels" (default) | "spread" | "exact"
  * @returns {mode, left, top, width, height, unit, sections: [{key, x0, x1, left, width}],
  *           stripTop, stripBottom, safe}; section left is relative to the board,
  *           unit = px per percent of the panel's height (a percent of its width
@@ -64,18 +112,20 @@ export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
   };
   const stripTop = safe.top;
   const stripBottom = stripTop + Math.round(STRIP_SHARE[mode] * H);
+  const above = mode === "panels" ? Math.max(safe.top, PANELS_TOP_PX) : stripBottom;
   const availW = Math.max(0, W - safe.left - safe.right);
-  const availH = Math.max(0, H - safe.bottom - stripBottom);
-  const xfH = (H - XFADER_CLEAR_PX - stripBottom) / XFADER_BOTTOM;   // tallest board whose crossfader clears
+  const availH = Math.max(0, H - safe.bottom - above);
+  const xfH = (H - XFADER_CLEAR_PX - above) / XFADER_BOTTOM;   // tallest board whose crossfader clears
   const height = Math.max(0, Math.min(availH, availW / BOARD_ASPECT, xfH));
   const natural = height * BOARD_ASPECT;
-  const width = mode === "spread" ? availW : natural;
-  const gap = mode === "spread" ? (availW - natural) / (SECTIONS.length - 1) : 0;
+  const spread = mode !== "exact";
+  const width = spread ? availW : natural;
+  const gap = spread ? (availW - natural) / (SECTIONS.length - 1) : 0;
   const left = safe.left + (availW - width) / 2;
-  // centered in the space below the strip, but never so low the crossfader
-  // enters the clear zone
-  const centered = stripBottom + (availH - height) / 2;
-  const top = Math.max(stripBottom, Math.min(centered, H - XFADER_CLEAR_PX - XFADER_BOTTOM * height));
+  // panels: at the top; the others centered in the space below the strip, but
+  // never so low the crossfader enters the clear zone
+  const centered = mode === "panels" ? above : above + (availH - height) / 2;
+  const top = Math.max(above, Math.min(centered, H - XFADER_CLEAR_PX - XFADER_BOTTOM * height));
   const unit = height / 100;
   let x = 0;
   const sections = SECTIONS.map((s) => {
@@ -84,7 +134,16 @@ export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
     x += w + gap;
     return out;
   });
-  return { mode, left, top, width, height, unit, sections, stripTop, stripBottom, safe };
+  return { mode, left, top, width, height, unit, sections, stripTop, stripBottom: mode === "panels" ? stripTop : stripBottom, safe };
+}
+
+/** The two gaps between the sections, in screen CSS px: [{x, y, w, h}, {x, y, w, h}]. */
+export function panelSlots(fit) {
+  const [d1, mx, d2] = fit.sections;
+  return [
+    { x: fit.left + d1.left + d1.width, y: fit.top, w: Math.max(0, mx.left - (d1.left + d1.width)), h: fit.height },
+    { x: fit.left + mx.left + mx.width, y: fit.top, w: Math.max(0, d2.left - (mx.left + mx.width)), h: fit.height },
+  ];
 }
 
 /** A panel box (percent) in screen px under a fitBoard result. */
@@ -97,4 +156,567 @@ export function placeBox(b, fit) {
     width: b.w * px,
     height: b.h * fit.unit,
   };
+}
+
+// ---- geometry helpers (board-relative px rects {x, y, w, h}) -------------------------
+
+const R = (x, y, w, h) => ({ x, y, w, h });
+const cxOf = (r) => r.x + r.w / 2;
+const cyOf = (r) => r.y + r.h / 2;
+const rightOf = (r) => r.x + r.w;
+const bottomOf = (r) => r.y + r.h;
+const EPS = 1e-9;
+
+function rectsOverlap(a, b) {
+  return a.x < rightOf(b) - EPS && b.x < rightOf(a) - EPS && a.y < bottomOf(b) - EPS && b.y < bottomOf(a) - EPS;
+}
+
+/** Does rect r enter shape s (a rect, or a disc when s.shape === "circle")? */
+function enters(r, s) {
+  if (!rectsOverlap(r, s)) return false;
+  if (s.shape !== "circle") return true;
+  const rad = s.w / 2, cx = s.x + rad, cy = s.y + s.h / 2;
+  const nx = Math.max(r.x, Math.min(cx, rightOf(r))), ny = Math.max(r.y, Math.min(cy, bottomOf(r)));
+  return Math.hypot(nx - cx, ny - cy) < rad - EPS;
+}
+
+/** A round part's disc against a rect or disc. */
+function shapesMeet(a, b) {
+  if (a.shape === "circle" && b.shape === "circle") {
+    return Math.hypot(cxOf(a) - cxOf(b), cyOf(a) - cyOf(b)) < a.w / 2 + b.w / 2 - EPS;
+  }
+  if (a.shape === "circle") return enters(b, a);
+  return enters(a, b);
+}
+
+const inflate = (r, d) => ({ ...r, x: r.x - d, y: r.y - d, w: r.w + 2 * d, h: r.h + 2 * d });
+
+/** Board-relative px box of a panel box (percent). */
+function relBox(b, fit) {
+  const p = placeBox(b, fit);
+  return R(p.left - fit.left, p.top - fit.top, p.width, p.height);
+}
+
+function sectionRect(fit, key) {
+  const s = fit.sections.find((t) => t.key === key);
+  return R(s.left, 0, s.width, fit.height);
+}
+
+const isBig = (c) => BIG_KINDS.includes(c.kind);
+const isRound = (c) => c.kind === "knob" || c.kind === "encoder" || c.look === "round" || c.look === "big";
+
+/** Half the extent of a centred rect (hx, hy) or disc (r) along unit vector u. */
+function support(shape, ux, uy) {
+  return shape.r !== undefined ? shape.r : shape.hx * Math.abs(ux) + shape.hy * Math.abs(uy);
+}
+
+// ---- drawn sizes ---------------------------------------------------------------------
+
+/** Largest v in [lo, hi] with pass(v) (pass(lo) holds; pass is monotone). */
+function growMax(lo, hi, pass) {
+  if (hi <= lo) return lo;
+  if (pass(hi)) return hi;
+  let a = lo, z = hi;
+  for (let i = 0; i < 40; i++) {
+    const m = (a + z) / 2;
+    if (pass(m)) a = m; else z = m;
+  }
+  return a;
+}
+
+/**
+ * Every control's drawn box, board-relative px.
+ * @returns Map id -> {x, y, w, h, shape: "rect"|"circle", section, base: {x,y,w,h},
+ *          limit: null | "neighbour" | "big" | "section" (why it stopped short of its minimum),
+ *          cellW, cellH (pads: their grid cell)}
+ */
+export function placeControls(fit, controls = CONTROLS) {
+  const out = new Map();
+  const base = new Map(controls.map((c) => [c.id, relBox(c, fit)]));
+  const secOf = (c) => sectionOf(c.x).key;
+
+  // pads first: the grid fills the deck's pad area
+  for (const deck of [1, 2]) {
+    const pads = controls.filter((c) => c.kind === "pad" && c.deck === deck);
+    if (!pads.length) continue;
+    const bs = pads.map((c) => base.get(c.id));
+    const area = R(Math.min(...bs.map((b) => b.x)), Math.min(...bs.map((b) => b.y)), 0, 0);
+    area.w = Math.max(...bs.map(rightOf)) - area.x;
+    area.h = Math.max(...bs.map(bottomOf)) - area.y;
+    const cols = 4, rows = Math.ceil(pads.length / cols);
+    const cellW = (area.w - (cols - 1) * PAD_GAP_PX) / cols;
+    const cellH = (area.h - (rows - 1) * PAD_GAP_PX) / rows;
+    const side = Math.min(cellW, cellH);
+    for (const c of pads) {
+      const col = c.index % cols, row = Math.floor(c.index / cols);
+      const x = area.x + col * (cellW + PAD_GAP_PX) + (cellW - side) / 2;
+      const y = area.y + row * (cellH + PAD_GAP_PX) + (cellH - side) / 2;
+      out.set(c.id, { ...R(x, y, side, side), shape: "rect", section: secOf(c), base: base.get(c.id), limit: null, cellW, cellH });
+    }
+  }
+
+  // big parts and the meters are fixed obstacles
+  const obstacles = [];
+  for (const c of controls) {
+    if (!isBig(c)) continue;
+    const b = base.get(c.id);
+    const d = { ...b, shape: c.kind === "jog" ? "circle" : "rect", section: secOf(c), base: b, limit: null };
+    out.set(c.id, d);
+    obstacles.push({ ...d, id: c.id });
+  }
+  for (const m of INDICATORS) obstacles.push({ ...relBox(m, fit), shape: "rect", section: sectionOf(m.x).key, id: m.id });
+
+  const smalls = controls.filter((c) => !isBig(c) && c.kind !== "pad");
+  for (const c of smalls) {
+    const b = base.get(c.id);
+    const sec = sectionRect(fit, secOf(c));
+    const cx = cxOf(b), cy = cyOf(b);
+    const round = isRound(c);
+    const min = c.kind === "knob" || c.kind === "encoder" ? KNOB_MIN_PX : c.kind === "lever" ? LEVER_MIN_PX : BUTTON_MIN_PX;
+    // the neighbours' half-planes: for each, how far this part may reach toward it
+    const others = [];
+    for (const n of controls) {
+      if (n.id === c.id || isBig(n) || secOf(n) !== secOf(c)) continue;
+      const nb = n.kind === "pad" ? out.get(n.id) : base.get(n.id);
+      const dx = cxOf(nb) - cx, dy = cyOf(nb) - cy;
+      const dist = Math.hypot(dx, dy);
+      if (!(dist > 0)) continue;
+      const ux = dx / dist, uy = dy / dist;
+      // the split sits halfway, unless a part's own (ungrown) shape already reaches past it
+      const mine = round ? { r: Math.max(b.w, b.h) / 2 } : { hx: b.w / 2, hy: b.h / 2 };
+      const theirs = isRound(n) ? { r: Math.max(nb.w, nb.h) / 2 } : { hx: nb.w / 2, hy: nb.h / 2 };
+      const split = Math.max(support(mine, ux, uy), Math.min(dist / 2, dist - support(theirs, ux, uy)));
+      others.push({ ux, uy, reach: split - DRAW_GAP_PX / 2 });
+    }
+    const obs = obstacles.filter((o) => o.section === secOf(c)).map((o) => inflate(o, DRAW_GAP_PX));
+    const ok = (w, h) => {
+      const shape = round ? { r: w / 2 } : { hx: w / 2, hy: h / 2 };
+      const r = R(cx - w / 2, cy - h / 2, w, h);
+      if (r.x < sec.x - EPS || rightOf(r) > rightOf(sec) + EPS || r.y < sec.y - EPS || bottomOf(r) > bottomOf(sec) + EPS) {
+        return "section";
+      }
+      for (const o of others) if (support(shape, o.ux, o.uy) > o.reach + EPS) return "neighbour";
+      const me = round ? { ...r, shape: "circle" } : { ...r, shape: "rect" };
+      for (const o of obs) if (shapesMeet(me, o)) return "big";
+      return null;
+    };
+    const fits = (fn) => (v) => !fn(v);
+    let w, h;
+    if (round) {
+      const d0 = Math.max(b.w, b.h);
+      w = h = growMax(d0, Math.max(d0, min), fits((v) => ok(v, v)));
+    } else {
+      // first the short side, keeping the part as square as it can (both sides
+      // up to t), then each side on its own to its target
+      const s = Math.max(1, min / Math.min(b.w, b.h));
+      const longT = Math.max(Math.max(b.w, b.h), Math.min(Math.max(b.w, b.h) * s, BUTTON_LONG_MAX_PX));
+      const t = growMax(Math.min(b.w, b.h), min, fits((v) => ok(Math.max(b.w, v), Math.max(b.h, v))));
+      w = Math.max(b.w, t);
+      h = Math.max(b.h, t);
+      const tw = b.w >= b.h ? longT : Math.max(min, b.w), th = b.h > b.w ? longT : Math.max(min, b.h);
+      h = growMax(h, Math.max(h, Math.min(th, BUTTON_ASPECT_MAX * w)), fits((v) => ok(w, v)));
+      w = growMax(w, Math.max(w, Math.min(tw, BUTTON_ASPECT_MAX * h)), fits((v) => ok(v, h)));
+    }
+    const why = ok(w + 0.05, h + 0.05);
+    const short = Math.min(w, h);
+    out.set(c.id, {
+      ...R(cx - w / 2, cy - h / 2, w, h), shape: round ? "circle" : "rect", section: secOf(c), base: b,
+      limit: short < min - 0.05 ? why || "neighbour" : null,
+    });
+  }
+  // keep CONTROLS' order
+  return new Map(controls.map((c) => [c.id, out.get(c.id)]));
+}
+
+// ---- hit zones -----------------------------------------------------------------------
+
+/**
+ * Where every touch goes, board-relative px.
+ * @returns {at(x, y) -> id | null, region(id) -> {x, y, w, h} (the most a small
+ *          zone may cover), extent(id) -> {w, h, limit}}
+ * at(): inside a big part's shape (the jog's disc, a fader's box) = that part;
+ * inside a small part's drawn shape = that part; else, among the small parts of
+ * the same section whose region holds the point (the drawn box grown by
+ * HIT_MARGIN_PX each side and to HIT_MIN_PX, clamped to the section), the one
+ * whose drawn outline is nearest (ties: the nearer centre); else nothing.
+ * Between two parts of the same size this is the Voronoi split of their
+ * centres; between a wide part and a small one the border sits in the middle
+ * of the gap between what is drawn, so a thumb 10 px off the wide part's edge
+ * still lands on it.
+ * extent(): the zone measured through the part's centre, across and down, and
+ * when it is under HIT_MIN_PX what stopped it ("neighbour", "big", "section").
+ */
+/** Distance from (x, y) to drawn part d's outline (0 inside it). */
+export function edgeDistance(x, y, d) {
+  if (d.shape === "circle") return Math.max(0, Math.hypot(x - cxOf(d), y - cyOf(d)) - d.w / 2);
+  const dx = Math.max(d.x - x, 0, x - rightOf(d)), dy = Math.max(d.y - y, 0, y - bottomOf(d));
+  return Math.hypot(dx, dy);
+}
+
+export function hitMap(fit, drawn, controls = CONTROLS) {
+  const big = [], small = [];
+  for (const c of controls) {
+    const d = drawn.get(c.id);
+    if (isBig(c)) { big.push({ id: c.id, d }); continue; }
+    const sec = sectionRect(fit, d.section);
+    const w = Math.max(HIT_MIN_PX, d.w + 2 * HIT_MARGIN_PX), h = Math.max(HIT_MIN_PX, d.h + 2 * HIT_MARGIN_PX);
+    const x0 = Math.max(sec.x, cxOf(d) - w / 2), x1 = Math.min(rightOf(sec), cxOf(d) + w / 2);
+    const y0 = Math.max(sec.y, cyOf(d) - h / 2), y1 = Math.min(bottomOf(sec), cyOf(d) + h / 2);
+    small.push({ id: c.id, d, cx: cxOf(d), cy: cyOf(d), region: R(x0, y0, x1 - x0, y1 - y0), section: d.section });
+  }
+  const inShape = (x, y, d) => {
+    if (x < d.x || x >= rightOf(d) || y < d.y || y >= bottomOf(d)) return false;
+    if (d.shape !== "circle") return true;
+    return Math.hypot(x - cxOf(d), y - cyOf(d)) <= d.w / 2;
+  };
+  const inRect = (x, y, r) => x >= r.x && x < rightOf(r) && y >= r.y && y < bottomOf(r);
+  function at(x, y) {
+    for (const b of big) if (inShape(x, y, b.d)) return b.id;
+    for (const s of small) if (inShape(x, y, s.d)) return s.id;
+    let best = null, bd = Infinity, bc = Infinity;
+    for (const s of small) {
+      if (!inRect(x, y, s.region)) continue;
+      const dist = edgeDistance(x, y, s.d), dc = Math.hypot(x - s.cx, y - s.cy);
+      if (dist < bd - 1e-9 || (Math.abs(dist - bd) <= 1e-9 && dc < bc)) { bd = dist; bc = dc; best = s.id; }
+    }
+    return best;
+  }
+  const byId = new Map(small.map((s) => [s.id, s]));
+  /** What sits at (x, y) when it is not `id`: why a walk from id's centre stopped. */
+  function blocker(id, x, y) {
+    const s = byId.get(id);
+    const sec = sectionRect(fit, s.section);
+    if (!inRect(x, y, sec)) return "section";
+    for (const b of big) if (inShape(x, y, b.d)) return "big";
+    if (!inRect(x, y, s.region)) return null;              // its own region ends here
+    return "neighbour";
+  }
+  function extent(id) {
+    const s = byId.get(id);
+    if (!s) { const b = big.find((t) => t.id === id); return { w: b.d.w, h: b.d.h, limit: null }; }
+    const step = 0.25;
+    const walk = (dx, dy) => {
+      let k = 0;
+      while (k < 400 && at(s.cx + dx * (k + 1) * step, s.cy + dy * (k + 1) * step) === id) k++;
+      return { len: k * step, why: blocker(id, s.cx + dx * (k + 1) * step, s.cy + dy * (k + 1) * step) };
+    };
+    const l = walk(-1, 0), r = walk(1, 0), t = walk(0, -1), b = walk(0, 1);
+    const w = l.len + r.len + step, h = t.len + b.len + step;
+    const whys = [l, r, t, b].map((q) => q.why).filter(Boolean);
+    const limit = w < HIT_MIN_PX - 0.5 || h < HIT_MIN_PX - 0.5
+      ? ["neighbour", "big", "section"].find((k) => whys.includes(k)) || null : null;
+    return { w, h, limit };
+  }
+  return { at, extent, region: (id) => byId.get(id)?.region || null };
+}
+
+// ---- legends -------------------------------------------------------------------------
+
+/** Advance widths of Archivo 700 (the faces; 600 is a hair narrower), in em,
+ *  measured in Chromium with canvas measureText. Legends are upper case. */
+const ADVANCE = {
+  A: 0.72, B: 0.72, C: 0.73, D: 0.74, E: 0.68, F: 0.62, G: 0.8, H: 0.75, I: 0.3, J: 0.6, K: 0.73, L: 0.59,
+  M: 0.87, N: 0.75, O: 0.79, P: 0.68, Q: 0.79, R: 0.73, S: 0.68, T: 0.64, U: 0.75, V: 0.69, W: 0.96, X: 0.71,
+  Y: 0.7, Z: 0.65, " ": 0.2, "/": 0.3, "&": 0.76, ".": 0.31, "-": 0.33, "+": 0.64, "\u2212": 0.64,
+  "\u25C0": 0.77, "\u25B6": 0.77, "\u25BC": 0.99, "\u25B2": 0.99,
+};
+/** Slack on the measured widths (WebKit's text runs a little wider). */
+const TEXT_SLACK = 1.04;
+
+/** The hardware's own short forms, longest first, used only where the full
+ *  legend cannot fit at LEGEND_MIN_PX. */
+export const SHORT = {
+  "KEYBOARD": ["KEYBD", "KEY"],
+  "MEMORY": ["MEMO", "MEM"],
+  "TEMPO RANGE": ["RANGE"],
+  "BEAT LOOP": ["B.LOOP", "LOOP"],
+  "BEAT JUMP": ["B.JUMP"],
+  "KEY SHIFT": ["KEY SFT", "KEY"],
+  "PAD FX2": ["FX2"],
+  "PAD FX1": ["FX1"],
+  "SAMPLER": ["SMPL"],
+  "SMART CFX": ["CFX"],
+  "SMART FADER": ["FADER"],
+  "RELEASE FX": ["REL FX", "REL"],
+  "LEVEL/DEPTH": ["LVL/DEPTH", "DEPTH"],
+  "4 BEAT/EXIT": ["4BEAT/EXIT", "4 BEAT"],
+  "MASTER LEVEL": ["MASTER"],
+  "MIC LEVEL": ["MIC"],
+  "FX SELECT": ["FX SEL"],
+  "PLAY/PAUSE": ["PLAY"],
+  "IN ADJ": ["ADJ"],
+  "OUT ADJ": ["ADJ"],
+  "ACTIVE": ["ACT"],
+  "CUE/LOOP": ["CUE/LP"],
+  "PERFORMANCE": ["PERF"],
+  "DJ CONTROLLER": ["DJ CTRL"],
+  "−MASTER": ["−MST"],
+};
+
+/** Width of text in em (one line, upper case). */
+export function textEm(text) {
+  let em = 0;
+  for (const ch of String(text).replace(/\uFE0E/g, "").toUpperCase()) em += ADVANCE[ch] ?? (/[0-9]/.test(ch) ? 0.6 : 0.75);
+  return em * TEXT_SLACK;
+}
+
+/** Text width in px at size px (one line). */
+export function textWidth(text, px, extraEm = 0) {
+  return (textEm(text) + extraEm) * px;
+}
+
+/**
+ * The size and text for a legend in a room roomW (x roomH) px:
+ * the largest size up to `base` that fits; under LEGEND_MIN_PX, the short form;
+ * never under LEGEND_MIN_PX (fits = false says it still overflows).
+ */
+export function fitText(text, roomW, { base, roomH = Infinity, extraEm = 0, wrap = false, disc = 0 } = {}) {
+  const best = (t) => {
+    const shapes = [[t]];
+    if (wrap && t.includes(" ")) shapes.push(t.split(" "));
+    let out = null;
+    for (const lines of shapes) {
+      const g = Math.max(...lines.map(textEm));
+      let px = Math.min(base, roomW / (g + extraEm), roomH / lines.length);
+      // on a round face (disc = its inner radius) a block of lines is as wide
+      // as the chord at its top and bottom edge
+      for (let i = 0; disc && i < 6; i++) {
+        const half = (lines.length * px) / 2;
+        const chord = half < disc ? 2 * Math.sqrt(disc * disc - half * half) : 0;
+        px = Math.min(base, chord / (g + extraEm), roomH / lines.length);
+      }
+      if (!out || px > out.px + 1e-9) out = { text: t, lines, px };
+    }
+    return out;
+  };
+  let f = best(text);
+  for (const short of SHORT[text] || []) {
+    if (f.px >= LEGEND_MIN_PX) break;
+    const s = best(short);
+    if (s.px > f.px) f = s;
+  }
+  const fits = f.px >= LEGEND_MIN_PX - 1e-9;
+  return { text: f.text, lines: f.lines, px: Math.max(LEGEND_MIN_PX, f.px), fits };
+}
+
+const pxw = (fit) => fit.unit * BOARD_ASPECT;
+
+/** Sizes to try for a legend: the full text from `base` down to LEGEND_MIN_PX,
+ *  then each short form the same way. */
+function* sizes(text, base) {
+  for (const t of [text, ...(SHORT[text] || [])]) {
+    for (let px = base; px >= LEGEND_MIN_PX - 1e-9; px -= 0.25) yield { text: t, px: Math.max(px, LEGEND_MIN_PX) };
+    if (base < LEGEND_MIN_PX) yield { text: t, px: LEGEND_MIN_PX };
+  }
+}
+
+const NUDGE = [0, 2, -2, 4, -4, 6, -6, 8, -8];
+
+/**
+ * Where every legend goes and how big, board-relative px.
+ * @returns [{key, owner, part: "label"|"sub"|"face"|"legend", text, lines, px, fits,
+ *            x, y, w, h (the text's box), side: "above"|"below"|"left"|"right"|"on"|"in"|"at",
+ *            boxed (a boxed SHIFT legend), section}]
+ * A legend is placed at the first spot, from the largest size down, where its
+ * box stays in its section and clear of every part but its own, the meters
+ * and the legends placed before it (faces, then labels, free legends, SHIFT
+ * legends). fits = false: no clear spot even at the shortest form and
+ * LEGEND_MIN_PX (it is drawn at its first spot).
+ */
+export function legendPlan(fit, drawn, controls = CONTROLS) {
+  const u = fit.unit;
+  const base = Math.max(LEGEND_MIN_PX, u * 1.85);
+  const gap = Math.max(1, u * 0.5);
+  const plan = [];
+  const solids = [];                                   // what a legend must not cover
+  for (const c of controls) solids.push({ ...drawn.get(c.id), id: c.id });
+  for (const m of INDICATORS) solids.push({ ...relBox(m, fit), shape: "rect", id: m.id, section: sectionOf(m.x).key });
+  const taken = [];
+  const faders = new Set(controls.filter((c) => c.kind === "fader").map((c) => c.id));
+  const clear = (r, owner, sec) => {
+    const s = sectionRect(fit, sec);
+    if (r.x < s.x + 0.5 || rightOf(r) > rightOf(s) - 0.5 || r.y < 0.5 || bottomOf(r) > fit.height - 0.5) return false;
+    for (const o of solids) {
+      // the printed marks beside a fader (TEMPO -/0/+, the channel numbers) sit in its tick area
+      if (owner === null && faders.has(o.id)) continue;
+      if (o.id !== owner && o.section === sec && enters(r, o)) return false;
+    }
+    for (const t of taken) if (t.section === sec && rectsOverlap(r, t)) return false;
+    return true;
+  };
+  /** First clear spot over sizes x spots(w, h); else (optional) hidden, or
+   *  the first spot at the smallest size. */
+  const place = (entry, text, b, extraEm, hMul, spots, owner, sec, keep = true, optional = false) => {
+    for (const z of sizes(text, b)) {
+      const tw = textWidth(z.text, z.px, extraEm), th = z.px * hMul;
+      for (const sp of spots(tw, th, z)) {
+        if (sp.inside ? sp.inside(sp.r) : clear(sp.r, owner, sec)) {
+          return commit(entry, z, sp, true, sec, keep);
+        }
+      }
+    }
+    if (optional) {
+      const out = { ...entry, text, lines: [text], px: LEGEND_MIN_PX, fits: true, hidden: true, x: 0, y: 0, w: 0, h: 0, side: "none", section: sec };
+      plan.push(out);
+      return out;
+    }
+    // nothing clear: the shortest form at the smallest size, at its first spot
+    const shortest = [text, ...(SHORT[text] || [])].at(-1);
+    const z = { text: shortest, px: LEGEND_MIN_PX };
+    const sp = spots(textWidth(z.text, z.px, extraEm), z.px * hMul, z)[0];
+    return commit(entry, z, sp, false, sec, keep);
+  };
+  const commit = (entry, z, sp, fits, sec, keep) => {
+    const r = sp.r;
+    const out = { ...entry, text: z.text, lines: [z.text], px: z.px, fits, x: r.x, y: r.y, w: r.w, h: r.h, side: sp.side, section: sec };
+    if (sp.side === "in") out.boxed = false;             // on the part itself: plain text
+    plan.push(out);
+    if (keep) taken.push({ ...r, section: sec });
+    return out;
+  };
+
+  /** Spots around part d: its printed side (first), nudged; beside it, outward
+   *  first; its printed side again up to 6 px onto its own edge (a knob's
+   *  scale arc); the opposite side. onlyFirst: the printed side, nudged, only. */
+  const aroundSpots = (d, sec, first, yFirst, onlyFirst = false) => (tw, th) => {
+    const outward = cxOf(d) < sectionRect(fit, sec).x + sectionRect(fit, sec).w / 2 ? "left" : "right";
+    const out = [];
+    const main = first === "above" ? d.y - gap - th : yFirst;
+    const away = first === "above" ? [0, -2, -4] : [0, 2, 4];
+    const onto = first === "above" ? [1, 2, 3, 4, 5, 6] : [-1, -2, -3, -4];
+    const printed = (dys) => {
+      for (const dy of dys) for (const dx of NUDGE) out.push({ side: first, r: R(cxOf(d) - tw / 2 + dx, main + dy, tw, th) });
+    };
+    printed(away);
+    if (onlyFirst) return out;
+    const sideSpot = (side) => {
+      for (const dy of [0, -2, 2, -4, 4, -6, 6]) {
+        const x = side === "left" ? d.x - gap - tw : rightOf(d) + gap;
+        out.push({ side, r: R(x, cyOf(d) - th / 2 + dy, tw, th) });
+      }
+    };
+    sideSpot(outward);
+    sideSpot(outward === "left" ? "right" : "left");
+    printed(onto);
+    const other = first === "above" ? bottomOf(d) + gap : d.y - gap - th;
+    for (const dx of [0, 2, -2, 4, -4]) out.push({ side: first === "above" ? "below" : "above", r: R(cxOf(d) - tw / 2 + dx, other, tw, th) });
+    return out;
+  };
+
+  const faceRooms = new Map();
+  // labels (printed above; TEMPO under its fader)
+  for (const c of controls) {
+    if (!c.label) continue;
+    const d = drawn.get(c.id);
+    const first = c.kind === "fader" ? "below" : "above";
+    const spots = aroundSpots(d, d.section, first, bottomOf(d) + gap);
+    // the headphone mark goes first when there is no room for it
+    const entry = { key: `${c.id}:label`, owner: c.id, part: "label", boxed: false, icon: !!c.phones };
+    if (c.phones) {
+      const n = plan.length;
+      const got = place(entry, c.label, base, 1.4, 1, spots, c.id, d.section);
+      if (got.fits) continue;
+      plan.splice(n, 1);
+      taken.pop();
+      entry.icon = false;
+    }
+    place(entry, c.label, base, 0, 1, spots, c.id, d.section);
+  }
+  // free legends, at their printed place (nudged off a grown part); lines
+  // printed as a stack (same x, under 3 % apart: CUE/LOOP over CALL) move together
+  const stacks = [];
+  LEGENDS.forEach((l, i) => {
+    const prev = stacks.at(-1), last = prev && LEGENDS[prev.at(-1)];
+    if (last && Math.abs(last.x - l.x) < 0.01 && l.y > last.y && l.y - last.y < 3) prev.push(i);
+    else stacks.push([i]);
+  });
+  const LEGEND_DY = [0, ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].flatMap((k) => [k, -k])];
+  const LEGEND_DX = [0, ...[2, 4, 6, 8, 10].flatMap((k) => [k, -k])];
+  for (const group of stacks) {
+    const ls = group.map((i) => LEGENDS[i]);
+    const sec = sectionOf(ls[0].x).key;
+    const s = fit.sections.find((t) => t.key === sec);
+    const bases = ls.map((l) => Math.max(LEGEND_MIN_PX, l.small ? base * 0.9 : l.strong ? base * 1.15 : base));
+    const x = s.left + (ls[0].x - s.x0) * pxw(fit);
+    const yMid = (ls[0].y + ls.at(-1).y) / 2 * u;
+    const forms = (l) => [l.text, ...(SHORT[l.text] || [])];
+    let done = null;
+    // sizes: every line from its base down, full text first, then the short forms
+    const tries = [];
+    for (let k = 0; k <= Math.max(...ls.map((l) => forms(l).length - 1)); k++) {
+      for (let px = Math.max(...bases); px >= LEGEND_MIN_PX - 1e-9; px -= 0.25) {
+        tries.push(ls.map((l, j) => ({ text: forms(l)[Math.min(k, forms(l).length - 1)], px: Math.max(LEGEND_MIN_PX, Math.min(px, bases[j])) })));
+      }
+    }
+    outer: for (const zs of tries) {
+      const hs = zs.map((z) => z.px), H = hs.reduce((a, b) => a + b, 0) + (zs.length - 1);
+      for (const dy of LEGEND_DY) for (const dx of LEGEND_DX) {
+        let y = yMid - H / 2 + dy;
+        const rs = zs.map((z) => { const tw = textWidth(z.text, z.px); const r = R(x - tw / 2 + dx, y, tw, z.px); y += z.px + 1; return r; });
+        const ok = rs.every((r) => clear(r, null, sec)) && (rs.length < 2 || !rectsOverlap(rs[0], rs[1]));
+        if (ok) { done = { zs, rs }; break outer; }
+      }
+    }
+    const fits = !!done;
+    if (!done) {
+      const zs = ls.map((l) => ({ text: forms(l).at(-1), px: LEGEND_MIN_PX }));
+      let y = yMid - (zs.length * (LEGEND_MIN_PX + 1)) / 2;
+      done = { zs, rs: zs.map((z) => { const tw = textWidth(z.text, z.px); const r = R(x - tw / 2, y, tw, z.px); y += z.px + 1; return r; }) };
+    }
+    group.forEach((i, j) => {
+      const z = done.zs[j], r = done.rs[j];
+      plan.push({ key: `legend:${i}`, owner: null, part: "legend", boxed: !!LEGENDS[i].boxed, text: z.text, lines: [z.text],
+        px: z.px, fits, x: r.x, y: r.y, w: r.w, h: r.h, side: "at", section: sec });
+      taken.push({ ...r, section: sec });
+    });
+  }
+  // legends under a part: the SHIFT legends (boxed) of what works in v1 first;
+  // a SHIFT legend for a layer v1 does not have (no shift action, or "not
+  // yet") is left off where there is no room for it
+  const works = (c) => (c.sub === "\u25B2\uFE0E" || c.subPlain || (c.shift && c.shift !== "board.notYet"));
+  const subs = controls.filter((c) => c.sub);
+  for (const c of [...subs.filter(works), ...subs.filter((x) => !works(x))]) {
+    const d = drawn.get(c.id);
+    const boxed = !c.subPlain;
+    const em = boxed ? 0.5 : 0;                                    // the box's padding and border
+    const hMul = boxed ? 1.2 : 1;
+    const b = boxed ? Math.max(LEGEND_MIN_PX, base * 0.9) : base;
+    const yWant = Math.max(c.subY !== undefined ? c.subY * u : 0, bottomOf(d) + gap);
+    // a legend for a layer v1 lacks is shown only where it is printed
+    const around = aroundSpots(d, d.section, "below", yWant, !works(c));
+    // the pad mode buttons sit between the jog and the pads, and a round
+    // button with no face has room on it: there, inside, at the bottom
+    const inButton = c.kind === "button" && (c.look === "mode" || (!c.face && works(c)));
+    const spots = (tw0, th, z) => {
+      const out = around(tw0, th);
+      if (inButton) {
+        const round = isRound(c);
+        const tw = textWidth(z.text, z.px);                        // plain on the part, no box
+        const th1 = z.px;
+        const r = round ? R(cxOf(d) - tw / 2, cyOf(d) - th1 / 2, tw, th1) : R(cxOf(d) - tw / 2, bottomOf(d) - th1 - 1, tw, th1);
+        const inside = round
+          ? (q) => Math.hypot(q.w / 2, q.h / 2) <= d.w / 2 - 2
+          : (q) => q.x >= d.x + 1.5 && rightOf(q) <= rightOf(d) - 1.5;
+        out.push({ side: "in", r, inside });
+      }
+      return out;
+    };
+    const got = place({ key: `${c.id}:sub`, owner: c.id, part: "sub", boxed }, c.sub, b, em, hMul, spots, c.id, d.section,
+      true, !works(c));
+    if (got.side === "in" && c.face) faceRooms.set(c.id, { top: d.y + 1, bottom: got.y - 0.5 });
+  }
+  // faces, on their parts (above a SHIFT legend that had to come inside)
+  for (const c of controls) {
+    if (!c.face || ["knob", "encoder", "fader", "xfader", "jog", "lever", "pad"].includes(c.kind)) continue;
+    const d = drawn.get(c.id);
+    const round = isRound(c);
+    const room = faceRooms.get(c.id);
+    const top = room ? room.top : d.y, h = room ? room.bottom - room.top : d.h;
+    const roomW = d.w - (round ? 3 : 4), roomH = room ? h : d.h * (round ? 0.7 : 0.84);
+    const fb = Math.max(LEGEND_MIN_PX, Math.min(Math.min(d.w, d.h) * 0.36, base * 1.6));
+    const f = fitText(c.face, roomW, { base: fb, roomH, wrap: true, disc: round ? d.w / 2 - 1.5 : 0 });
+    plan.push({ key: `${c.id}:face`, owner: c.id, part: "face", boxed: false, ...f, x: d.x, y: top, w: d.w, h,
+      side: "on", section: d.section });
+  }
+  return plan;
 }

@@ -165,7 +165,7 @@ const PHONES = [
 
 test("crossfader_clears_the_home_indicator_zone", () => {
   const xf = byId.get("xfader");
-  assert.equal(LAYOUT, "spread", "spread is the default (ruling R23)");
+  assert.equal(LAYOUT, "panels", "panels is the default (Cabine v2); spread and exact stay for comparison");
   assert.ok(XFADER_CLEAR_PX >= 34);
   for (const mode of LAYOUTS) {
     for (const { W, H, insets } of PHONES) {
@@ -176,6 +176,7 @@ test("crossfader_clears_the_home_indicator_zone", () => {
       const L = Math.max(insets.left, SAFE_FALLBACK.side), R = Math.max(insets.right, SAFE_FALLBACK.side);
       assert.ok(b.left >= L - 1e-9 && b.left + b.width <= W - R + 1e-9, `${tag}: inside the side safe areas`);
       assert.ok(b.top >= b.stripBottom - 1e-9, `${tag}: below the strip`);
+      if (mode === "panels") assert.equal(b.stripBottom, b.stripTop, `${tag}: no strip band`);
       assert.ok(b.top + b.height <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-9, `${tag}: above the home bar`);
       assert.equal(b.stripBottom - b.stripTop, Math.round(STRIP_SHARE[mode] * H));
       // every control lands inside the board, inside the safe area, and keeps its shape

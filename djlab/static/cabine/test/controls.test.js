@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever,
+  Knob, Encoder, Fader, XFader, Button, Pad, Jog, Lever, TouchRouter,
   KNOB_SWEEP_PX, TEMPO_FINE_HOLD_MS, TEMPO_FINE_SCALE, JOG_TOP_PLATE_RATIO, RING_BEND_GAIN,
   JOG_HUB_RATIO, JOG_MAX_STEP_DEG, angleDelta, jogZone, faderDelta, fineScale,
 } from "../ui/controls.js";
@@ -221,4 +221,52 @@ test("jog_line_through_the_hub_emits_no_turn", () => {
   el.fire("pointermove", 3, 74 - 35, 74 + 35);                     // 135 degrees in one event
   el.fire("pointerup", 3, 39, 109);
   assert.equal(got.find((e) => "turn" in e).turn, JOG_MAX_STEP_DEG);
+});
+
+test("router_hands_a_zone_touch_to_its_widget_with_capture", () => {
+  // the section answers for its small parts: a touch anywhere in a part's
+  // zone is that part's, captured on the section, one pointer per part
+  const clock = fakeClock();
+  const sec = new FakeEl({ left: 0, top: 0, width: 300, height: 200 });
+  const knobEl = new FakeEl(), shiftEl = new FakeEl(), padEl = new FakeEl();
+  const got = [];
+  const knob = new Knob(knobEl, { def: 0.5, value: 0.5 }, (v) => got.push(["knob", v]), { ...clock, routed: sec });
+  const shift = new Button(shiftEl, {}, (v) => got.push(["shift", v]), { ...clock, routed: sec });
+  const pad = new Pad(padEl, {}, (v) => got.push(["pad", v]), { ...clock, routed: sec });
+  assert.equal(knobEl.listeners.size, 0, "a routed widget does not listen on its drawn element");
+  // zones: x < 100 knob, 100..200 shift, 200.. pad, y > 150 nobody
+  const router = new TouchRouter(sec, (e) => (e.clientY > 150 ? null : e.clientX < 100 ? knob : e.clientX < 200 ? shift : pad));
+  sec.fire("pointerdown", 1, 150, 10);                       // SHIFT held
+  assert.deepEqual(got.at(-1), ["shift", true]);
+  assert.ok(sec.captured.has(1) && shiftEl.classes.has("cab-held"));
+  sec.fire("pointerdown", 2, 40, 100);                        // a drag starting at the knob zone's edge
+  sec.fire("pointermove", 2, 250, 10);                        // slides over the pad's zone: still the knob
+  assert.deepEqual(got.at(-1), ["knob", 1], "the knob: 90 px up = +0.5, capture kept");
+  assert.ok(!got.some(([k]) => k === "pad"));
+  sec.fire("pointerdown", 3, 250, 50);                        // pad while SHIFT and the knob are held
+  assert.deepEqual(got.at(-1), ["pad", true]);
+  sec.fire("pointerdown", 4, 120, 50);                        // a second finger on SHIFT: ignored
+  sec.fire("pointerup", 4, 120, 50);
+  assert.equal(got.filter(([k]) => k === "shift").length, 1, "one pointer per widget");
+  sec.fire("pointerdown", 5, 50, 180);                        // nobody's zone: nothing
+  sec.fire("pointerup", 5, 50, 180);
+  sec.fire("pointercancel", 2, 250, 10);                      // cancel = release
+  assert.equal(knob.pid, null);
+  sec.fire("pointermove", 2, 250, 300);
+  assert.deepEqual(got.filter(([k]) => k === "knob").at(-1), ["knob", 1], "after cancel the knob holds nothing");
+  sec.fire("pointerup", 3, 250, 50);
+  sec.fire("pointerup", 1, 150, 10);
+  assert.deepEqual(got.at(-1), ["shift", false]);
+  assert.ok(!sec.captured.has(1) && !shiftEl.classes.has("cab-held"));
+  // a lost capture releases too
+  sec.fire("pointerdown", 6, 150, 10);
+  sec.fire("lostpointercapture", 6, 150, 10);
+  assert.deepEqual(got.at(-1), ["shift", false]);
+  // the knob's double tap works through the router
+  sec.fire("pointerdown", 7, 40, 100); sec.fire("pointerup", 7, 40, 100);
+  clock.advance(100);
+  sec.fire("pointerdown", 8, 42, 100); sec.fire("pointerup", 8, 42, 100);
+  assert.deepEqual(got.at(-1), ["knob", 0.5]);
+  router.destroy();
+  assert.equal(sec.listeners.get("pointerdown").size, 0);
 });

@@ -33,9 +33,12 @@ def _context(browser, engine, w=844, h=390, auth_cookie=None):
     return ctx
 
 
-def _open(ctx, base_url, carry=(), insets=None):
+def _open(ctx, base_url, carry=(), insets=None, layout="spread"):
     """/cabine with `carry` on the phone (carried in that order, so the last
-    one is at the top of the list), then the board."""
+    one is at the top of the list), then the board. These tests are about the
+    engine and the waveform strip, which only has its band in the "spread"
+    layout (Cabine v2 Task V2 replaces it with the deck panels); the default
+    "panels" layout plays the real app in test_offline.py and test_board.py."""
     page = ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -48,7 +51,7 @@ def _open(ctx, base_url, carry=(), insets=None):
         page.evaluate("""(i) => { const s = document.documentElement.style;
             s.setProperty('--cab-inset-left', i.left + 'px'); s.setProperty('--cab-inset-right', i.right + 'px');
             s.setProperty('--cab-inset-bottom', i.bottom + 'px'); }""", insets)
-    page.evaluate("() => window.cabine.showBoard()")
+    page.evaluate("(m) => window.cabine.showBoard({layout: m})", layout)
     page.wait_for_selector(".cab-board .cab-board-ctl", state="attached")
     page.wait_for_function("() => window.cabine.strip && window.cabine.strip.tracks.length >= 0")
     page.errors = errors

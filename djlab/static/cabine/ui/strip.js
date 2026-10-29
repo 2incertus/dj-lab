@@ -192,6 +192,8 @@ export class Strip {
     this.g = canvas.getContext("2d", { alpha: false });
     this.store = opts.store || null;
     this.reserveLeft = opts.reserveLeft || (() => 0);
+    /** Where REC lives when the board has no strip band (the panels layout). */
+    this.recHost = opts.recHost || null;
     this.decks = opts.decks || [];
     this.ctx = opts.ctx || null;
     this.mixer = opts.mixer || null;
@@ -225,7 +227,7 @@ export class Strip {
     this._recCb = null;
     this._onRec = (e) => { e.preventDefault(); if (this._recCb) this._recCb(); };
     this.rec.addEventListener("click", this._onRec);
-    slot.appendChild(this.rec);
+    (this.recHost || slot).appendChild(this.rec);
 
     // the list scrolls with a finger (the board cancels native scrolling)
     this._drag = null;
@@ -384,7 +386,7 @@ export class Strip {
     this.canvas.style.height = `${H}px`;
     const { list, rec } = this.L;
     Object.assign(this.list.style, { left: `${list.x}px`, top: `${list.y}px`, width: `${list.w}px`, height: `${list.h}px` });
-    Object.assign(this.rec.style, { left: `${rec.x}px`, top: `${rec.y}px`, width: `${rec.w}px`, height: `${rec.h}px` });
+    if (!this.recHost) Object.assign(this.rec.style, { left: `${rec.x}px`, top: `${rec.y}px`, width: `${rec.w}px`, height: `${rec.h}px` });
     this._prerender(0);
     this._prerender(1);
     this._keys = {};
