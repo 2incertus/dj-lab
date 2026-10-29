@@ -100,26 +100,32 @@ export function loopLabel(L, grid) {
 
 /** The 4-cell phase meter. own, master: bar phases in beats [0, 4) or null.
  *  cells: "off" | "own" (this deck's beat) | "ref" (the master's) | "both";
- *  aligned: null with no master, else same beat of the bar and within
- *  PHASE_TOLERANCE of a beat. */
+ *  aligned: null with no master, else whether the signed drift from the
+ *  master (modulo the bar, in [-2, 2) beats) is under PHASE_TOLERANCE. In
+ *  phase, the master's cell lights as both (two decks a hundredth of a beat
+ *  either side of a beat line are in phase, not a beat apart); out of phase,
+ *  this deck lights Math.round(drift) beats from the master's cell. */
 export function phaseCells(own, master) {
   const cells = ["off", "off", "off", "off"];
   if (own === null || own === undefined || !Number.isFinite(own)) return { cells, aligned: null };
-  const o = Math.min(3, Math.max(0, Math.floor(own)));
+  const o = Math.min(3, Math.max(0, Math.floor(((own % 4) + 4) % 4)));
   if (master === null || master === undefined || !Number.isFinite(master)) {
     cells[o] = "own";
     return { cells, aligned: null };
   }
-  const m = Math.min(3, Math.max(0, Math.floor(master)));
-  let drift = (own - master) % 1;
-  if (drift > 0.5) drift -= 1;
-  if (drift < -0.5) drift += 1;
-  if (o === m) {
-    cells[o] = "both";
-    return { cells, aligned: Math.abs(drift) < PHASE_TOLERANCE };
+  const m = Math.min(3, Math.max(0, Math.floor(((master % 4) + 4) % 4)));
+  const drift = ((((own - master) % 4) + 6) % 4) - 2;
+  if (Math.abs(drift) < PHASE_TOLERANCE) {
+    cells[m] = "both";
+    return { cells, aligned: true };
   }
-  cells[m] = "ref";
-  cells[o] = "own";
+  const k = (((m + Math.round(drift)) % 4) + 4) % 4;
+  if (k === m) {
+    cells[m] = "both";                               // the same beat, drifting
+  } else {
+    cells[m] = "ref";
+    cells[k] = "own";
+  }
   return { cells, aligned: false };
 }
 
@@ -149,6 +155,8 @@ export function readout(d, master, T) {
     bpm: formatBpm(d.effectiveBpm()),
     tempo: formatTempo(st.tempoPct),
     range: formatRange(st.range),
+    // remaining time and the red ring are in track seconds, not tempo-adjusted
+    // wall time (the CDJ convention, ruling R7-v2)
     time: formatRemaining(Number.isFinite(dur) ? dur - pos : NaN),
     red: ring.red,
     frac: ring.frac,

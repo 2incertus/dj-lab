@@ -197,10 +197,16 @@ test("hit_zones_are_44px_nearest_outline_and_spare_the_big_controls", () => {
           if (bigHere) { assert.equal(id, bigHere.id, `${tag}: (${x}, ${y}) in ${bigHere.id}`); continue; }
           const drawnHere = smalls.find((c) => inShape(x, y, drawn.get(c.id)));
           if (drawnHere) { assert.equal(id, drawnHere.id, `${tag}: (${x}, ${y}) on ${drawnHere.id}`); continue; }
-          // phone: a channel knob's row (ruling R3-v2) comes before the nearest rule
-          const rowOf = smalls.find((c) => { const z = map.rowZone(c.id); return z && x >= z.x && x < right(z) && y >= z.y && y < bottom(z); });
-          if (rowOf) { assert.equal(id, rowOf.id, `${tag}: (${x}, ${y}) on ${rowOf.id}'s row`); continue; }
           const cands = smalls.filter((c) => { const r = map.region(c.id); return x >= r.x && x < right(r) && y >= r.y && y < bottom(r); });
+          // phone: a channel knob's row (ruling R3-v2) takes what nobody else
+          // answers, or what a knob of its own channel would
+          const rowOf = smalls.find((c) => { const z = map.rowZone(c.id); return z && x >= z.x && x < right(z) && y >= z.y && y < bottom(z); });
+          if (rowOf) {
+            const near = cands.length ? cands.reduce((a, c) => (edgeDistance(x, y, drawn.get(c.id)) < edgeDistance(x, y, drawn.get(a.id)) ? c : a)) : null;
+            const same = near && /^ch[12]-/.test(near.id) && near.id.slice(0, 3) === rowOf.id.slice(0, 3)
+              && /-(trim|hi|mid|low|cfx)$/.test(near.id);
+            if (!near || same) { assert.equal(id, rowOf.id, `${tag}: (${x}, ${y}) on ${rowOf.id}'s row`); continue; }
+          }
           if (!cands.length) { assert.equal(id, null, `${tag}: (${x}, ${y}) is no one's`); continue; }
           const dist = (c) => edgeDistance(x, y, drawn.get(c.id));
           const near = Math.min(...cands.map(dist));
@@ -391,15 +397,9 @@ test("phone_mixer_knobs_answer_across_their_whole_row", () => {
         const cy = d.y + d.h / 2;
         assert.ok(Math.abs(z.x - span.x) < EPS && Math.abs(z.w - span.w) < EPS, `${vp.tag}: ${id} spans its channel`);
         assert.ok(z.y <= d.y + EPS && z.y + z.h >= d.y + d.h - EPS, `${vp.tag}: ${id} row holds the knob`);
-        for (let k = 0; k <= 20; k++) {
-          const x = span.x + 0.5 + (span.w - 1) * (k / 20);
-          for (const y of [z.y + 0.5, cy, z.y + z.h - 0.5]) {
-            const owner = CONTROLS.find((c) => c.id !== id && !isBig(c) && (() => { const o = drawn.get(c.id);
-              return x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h; })());
-            if (owner) continue;                                  // a drawn part keeps its own touches
-            assert.equal(map.at(x, y), id, `${vp.tag}: (${x.toFixed(1)}, ${y.toFixed(1)}) on ${id}'s row`);
-          }
-        }
+        // the row's outer end and its centre line are the knob's (the drag start)
+        const outer = ch === 1 ? span.x + 2 : span.x + span.w - 2;
+        assert.equal(map.at(outer, cy), id, `${vp.tag}: ${id} at its row's outer end`);
       }
       // the rows share the height: each row ends where the next begins
       for (let i = 1; i < rows.length; i++) {
@@ -409,6 +409,22 @@ test("phone_mixer_knobs_answer_across_their_whole_row", () => {
     }
     // the outer end of channel 1's rows is left of the knob, channel 2's right of it
     assert.ok(map.channelSpan(1).x < drawn.get("ch1-hi").x - 5 && map.channelSpan(2).x + map.channelSpan(2).w > drawn.get("ch2-hi").x + drawn.get("ch2-hi").w + 5, `${vp.tag}: outer ends`);
+    // rows only add area: wherever they change a touch's owner, the rule without
+    // rows gave it to nobody or to a knob of that same channel, never to BROWSE,
+    // LOAD, a channel CUE, MASTER CUE, FX CH or any other part
+    const bare = hitMap(fit, drawn, CONTROLS, { rows: false });
+    const knobOf = (id) => /^ch([12])-(trim|hi|mid|low|cfx)$/.exec(id || "");
+    let gained = 0;
+    for (let y = 0.25; y < fit.height; y += 0.5) {
+      for (let x = fit.sections[1].left + 0.25; x < fit.sections[1].left + fit.sections[1].width; x += 0.5) {
+        const a = map.at(x, y), b = bare.at(x, y);
+        if (a === b) continue;
+        const ka = knobOf(a), kb = knobOf(b);
+        assert.ok(ka && (b === null || (kb && kb[1] === ka[1])), `${vp.tag}: (${x}, ${y}) ${b} -> ${a}`);
+        gained++;
+      }
+    }
+    if (vp.tag !== "760x360") assert.ok(gained > 0, `${vp.tag}: the rows add some area (${gained} points)`);
     // not in the other layouts
     const panels = geometry(vp, "panels");
     assert.equal(panels.map.rowZone("ch1-hi"), null);

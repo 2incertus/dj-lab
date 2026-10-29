@@ -707,8 +707,21 @@ def test_phone_browse_opens_over_the_mixer(engine, w, h, chromium, webkit, base_
         for cid in ("browse", "load1", "load2"):
             assert r[cid]["b"] <= lst["y"] + 0.5, f"{cid} stays uncovered"
         assert rows >= 4, rows
+        # ruling R6-v2: the list ends above the channel CUE row; the CUEs, the
+        # channel faders and the crossfader stay uncovered and keep working
+        for cid in ("ch1-cue", "ch2-cue", "ch1-fader", "ch2-fader", "xfader"):
+            assert r[cid]["t"] >= lst["y"] + lst["height"] - 0.5, f"{cid} under the list"
         V2_SHOTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(V2_SHOTS / f"phone-browse-mixer-{engine}-{w}x{h}.png"))
+        page.wait_for_function("() => window.cabine.engine")
+        n0 = len(page.evaluate("() => window.cabine.boardLog"))
+        drag(page, r["ch1-fader"], 0, 40)                    # pulled down from the top: 1 -> less
+        drag(page, r["xfader"], r["xfader"]["w"] * 0.3, 0)
+        tap(page, r, "ch2-cue")
+        acts = [e["action"] for e in page.evaluate("() => window.cabine.boardLog")[n0:]]
+        assert "mixer.setFader" in acts and "mixer.setCrossfader" in acts and "mixer.setCue" in acts, acts
+        assert page.evaluate("() => window.cabine.engine.mixer.state.channels[0].fader") < 1
+        assert page.evaluate("() => window.cabine.strip.isBrowseOpen"), "the list stays open"
         assert page.evaluate("() => window.cabine.strip.highlighted()") == b
         tap(page, r, "load1")
         wait_loaded(page, 0, b)

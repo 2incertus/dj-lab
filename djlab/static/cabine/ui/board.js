@@ -21,7 +21,8 @@
 // Touch: the jog, the faders and the crossfader take touches on their own
 // element. Every other part is drawn with pointer-events: none; its section
 // answers for it (a TouchRouter) and hands each touch to the part whose hit
-// zone holds it (hitMap: grown past the drawn part, split by nearest centre),
+// zone holds it (hitMap: grown past the drawn part, split by the nearest drawn
+// outline; in "phone" a channel knob also owns the rest of its row),
 // so a thumb that lands near a small button presses it.
 //
 // "phone" (default): the strip is a slim band on top (caixa at its left end,
@@ -32,9 +33,9 @@
 // Every jog carries its jog display canvas (jogCanvases(), drawn by
 // ui/jog-screen.js from app.js's frame loop), pointer-events: none.
 // "panels" (V1, for comparison): the two gaps beside the mixer are
-// panelSlots() (screen CSS px) and panels() their two elements.
-// Until then the left one holds the caixa button and the right one REC
-// (recHost); the strip (browse list) shows over deck 1 while the list is open.
+// panelSlots() (screen CSS px) and panels() their two elements; there the
+// left one holds the caixa button and the right one REC (recHost), and the
+// strip (browse list) shows over deck 1 while the list is open.
 //
 // The board itself owns three things, as the hardware does:
 // - SHIFT, per deck and held (it also sends deck.setShift, so the deck can
@@ -488,14 +489,18 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     } else {
       if (mode === "phone") {
         // the browse list opens over the mixer, under the BROWSE / LOAD row (the
-        // band is two list rows tall on a phone); BROWSE and LOAD stay uncovered
+        // band is two list rows tall on a phone); BROWSE and LOAD stay uncovered,
+        // and it ends above the channel CUE row, so the CUEs, the channel faders
+        // and the crossfader keep working with the list open (ruling R6-v2)
         const mix = f.sections.find((x) => x.key === "mixer");
         const ids = ["browse", "load1", "load2"];
         const top = Math.max(...ids.map((id) => drawn.get(id)).filter(Boolean).map((d) => d.y + d.h),
           ...legends.filter((l) => !l.hidden && ids.includes(l.owner)).map((l) => l.y + l.h)) + 3;
+        const cues = ["ch1-cue", "ch2-cue"].map((id) => drawn.get(id)).filter(Boolean);
+        const bottom = cues.length ? Math.min(...cues.map((d) => d.y)) - 3 : f.height;
         Object.assign(browseHost.style, {
           left: `${f.left + mix.left}px`, top: `${f.top + top}px`, width: `${mix.width}px`,
-          height: `${f.height - top}px`,
+          height: `${Math.max(0, bottom - top)}px`,
         });
       }
       Object.assign(strip.style, {

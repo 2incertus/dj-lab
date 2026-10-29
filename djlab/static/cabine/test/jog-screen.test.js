@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  formatBpm, formatTempo, formatRange, formatRemaining, keyShort, loopLabel, phaseCells, readout, ringState,
+  formatBpm, formatTempo, formatRange, formatRemaining, keyShort, loopLabel, phaseCells, readout, ringState, PHASE_TOLERANCE,
   screenPlan, RED_LAST_S, MIN_PX, PRIORITY,
 } from "../ui/jog-screen.js";
 
@@ -97,10 +97,29 @@ test("phase_cells_against_the_master", () => {
   assert.deepEqual(phaseCells(1.6, 1.5), { cells: ["off", "both", "off", "off"], aligned: false });
   // a beat apart in the bar: two cells, not aligned
   assert.deepEqual(phaseCells(2.5, 1.5), { cells: ["off", "ref", "own", "off"], aligned: false });
-  // across the bar line: 3.99 vs 0.01 is in phase on the beat, a bar apart in the bar
-  assert.deepEqual(phaseCells(3.99, 0.01), { cells: ["ref", "off", "off", "own"], aligned: false });
+  // across a beat line or the bar line: a few hundredths apart is in phase, one cell
+  assert.deepEqual(phaseCells(3.99, 0.01), { cells: ["both", "off", "off", "off"], aligned: true });
+  assert.deepEqual(phaseCells(0.01, 3.99), { cells: ["off", "off", "off", "both"], aligned: true });
+  assert.deepEqual(phaseCells(1.99, 2.01), { cells: ["off", "off", "both", "off"], aligned: true });
   // a master with no grid: as if there were none
   assert.deepEqual(phaseCells(0.5, null).cells, ["own", "off", "off", "off"]);
+});
+
+test("phase_cells_read_the_signed_drift_from_the_master", () => {
+  assert.equal(PHASE_TOLERANCE, 0.05);
+  const at = (drift, master = 1.5) => phaseCells(master + drift, master);
+  // within the tolerance either way: the master's cell, both, aligned
+  assert.deepEqual(at(0.02), { cells: ["off", "both", "off", "off"], aligned: true });
+  assert.deepEqual(at(-0.02), { cells: ["off", "both", "off", "off"], aligned: true });
+  assert.deepEqual(at(-0.02, 0.01), { cells: ["both", "off", "off", "off"], aligned: true }, "across the bar line");
+  // half a beat ahead: rounds to the next beat
+  assert.deepEqual(at(0.5), { cells: ["off", "ref", "own", "off"], aligned: false });
+  // a beat ahead, and nearly two behind (wrapping round the bar)
+  assert.deepEqual(at(1.0), { cells: ["off", "ref", "own", "off"], aligned: false });
+  assert.deepEqual(at(-1.98), { cells: ["off", "ref", "off", "own"], aligned: false });
+  assert.deepEqual(at(-1.98, 0.2), { cells: ["ref", "off", "own", "off"], aligned: false });
+  // a tenth of a beat off: the same cell, not aligned
+  assert.deepEqual(at(0.1), { cells: ["off", "both", "off", "off"], aligned: false });
 });
 
 test("readout_of_a_synced_deck_against_its_master", () => {

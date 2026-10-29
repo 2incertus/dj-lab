@@ -504,7 +504,7 @@ export function edgeDistance(x, y, d) {
   return Math.hypot(dx, dy);
 }
 
-export function hitMap(fit, drawn, controls = CONTROLS) {
+export function hitMap(fit, drawn, controls = CONTROLS, { rows = true } = {}) {
   const big = [], small = [];
   for (const c of controls) {
     const d = drawn.get(c.id);
@@ -521,16 +521,22 @@ export function hitMap(fit, drawn, controls = CONTROLS) {
     return Math.hypot(x - cxOf(d), y - cyOf(d)) <= d.w / 2;
   };
   const inRect = (x, y, r) => x >= r.x && x < rightOf(r) && y >= r.y && y < bottomOf(r);
-  const { spans, rowZones } = fit.mode === "phone" ? knobRows(drawn) : { spans: null, rowZones: new Map() };
+  const { spans, rowZones } = fit.mode === "phone" && rows ? knobRows(drawn) : { spans: null, rowZones: new Map() };
   function at(x, y) {
     for (const b of big) if (inShape(x, y, b.d)) return b.id;
     for (const s of small) if (inShape(x, y, s.d)) return s.id;
-    for (const [id, z] of rowZones) if (inRect(x, y, z)) return id;
     let best = null, bd = Infinity, bc = Infinity;
     for (const s of small) {
       if (!inRect(x, y, s.region)) continue;
       const dist = edgeDistance(x, y, s.d), dc = Math.hypot(x - s.cx, y - s.cy);
       if (dist < bd - 1e-9 || (Math.abs(dist - bd) <= 1e-9 && dc < bc)) { bd = dist; bc = dc; best = s.id; }
+    }
+    // a knob's row only adds area: it takes a point nobody else answers, or one
+    // a knob of its own channel would (never BROWSE, LOAD, a CUE or the Beat FX)
+    for (const [id, z] of rowZones) {
+      if (!inRect(x, y, z)) continue;
+      if (best === null || sameChannelKnob(best, id)) return id;
+      break;
     }
     return best;
   }
@@ -575,8 +581,15 @@ export function hitMap(fit, drawn, controls = CONTROLS) {
  *  mixer's outer column (MIC, SMART, phones | MASTER, Beat FX) and its knobs
  *  to the middle between the two channels' knobs; a row from halfway to the
  *  row above (TRIM: to LOAD) to halfway to the row below (CFX: to the channel
- *  CUE). Drawn parts keep their own touches. */
+ *  CUE). Drawn parts keep their own touches, and a row only adds area: it
+ *  takes a point the nearest-outline rule gives to nobody or to a knob of the
+ *  same channel, never one it gives to another part (BROWSE, LOAD, a CUE). */
 const KNOB_ROWS = ["trim", "hi", "mid", "low", "cfx"];
+const KNOB_ID = /^ch([12])-(trim|hi|mid|low|cfx)$/;
+const sameChannelKnob = (a, b) => {
+  const ka = KNOB_ID.exec(a), kb = KNOB_ID.exec(b);
+  return !!(ka && kb && ka[1] === kb[1]);
+};
 const LEFT_COLUMN = ["mic-level", "smart-cfx", "phones-mix", "phones-level", "smart-fader"];
 const RIGHT_COLUMN = ["master-level", "master-cue", "fx-ch", "fx-select", "fx-beat-down", "fx-beat-up", "fx-level", "fx-on"];
 function knobRows(drawn) {
