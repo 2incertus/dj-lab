@@ -3,8 +3,9 @@ landscape phone, driven by the demo bindings (showBoard({demo: true}): every
 action logged in window.cabine.boardLog, no audio; Task 10's engine bindings
 are tested in test_play.py).
 
-Three phones: Mathias's iPhone in WebKit, 844 x 390 (installed app) and
-844 x 330 (Safari with its landscape bars, his screenshot), with the iPhone's
+Three phones: Mathias's iPhone in WebKit, 844 x 390 (installed app),
+844 x 330 (Safari with its landscape bars) and 844 x 300 (a browser with its
+tab bar, his v3 screenshot; Task V4), with the iPhone's
 safe-area padding emulated through the --cab-inset-* CSS variables (WebKit on
 Linux has no notch, so env() reads 0), and the Galaxy, 760 x 360 in Chromium
 with touch. Multi-touch goes through CDP Input.dispatchTouchEvent, so it is
@@ -23,7 +24,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-SHOTS = Path.home() / "cabine-shots" / "v3"
+SHOTS = Path.home() / "cabine-shots" / "v4"
 XFADER_CLEAR_PX = 34
 # the iPhone's left inset when the Dynamic Island is on the left: more than the
 # 47 px fallback, so the test proves the inset is read, not just the fallback
@@ -32,9 +33,17 @@ IPHONE_INSETS = {"left": 59, "right": 47, "bottom": 21}
 PHONES = {
     "iphone-webkit": {"engine": "webkit", "w": 844, "h": 390, "insets": IPHONE_INSETS},
     "iphone-safari-webkit": {"engine": "webkit", "w": 844, "h": 330, "insets": {"left": 47, "right": 47, "bottom": 21}},
+    # Task V4: a browser in landscape with its tab bar (the owner's v3 screenshot)
+    "iphone-tabbar-webkit": {"engine": "webkit", "w": 844, "h": 300, "insets": {"left": 47, "right": 47, "bottom": 21}},
     "galaxy-chromium": {"engine": "chromium", "w": 760, "h": 360, "insets": None},
 }
 PANELS_TOP_PX = 6
+# board-layout.test.js KNOWN_UNFIT: legends with no clear room at 844 x 300
+KNOWN_UNFIT = {
+    "phone 844x300": ("legend:21", "legend:22", "smart-fader:face"),
+    "panels 844x300": ("d1-mode-beatjump:sub", "d2-mode-beatjump:sub", "d1-sync:face", "d2-sync:face",
+                       *(f"d{d}-mode-{m}:face" for d in (1, 2) for m in ("hotcue", "beatjump", "sampler"))),
+}
 
 
 @pytest.fixture(scope="session")
@@ -263,6 +272,8 @@ def _check_hittable(page, phone):
         else:
             assert board["l"] > insets["left"] + 20, "exact: the panel at its own proportions, centered"
     _check_legends(page, g, phone)
+    if phone["layout"] == "phone":
+        _check_deck_legends_inside(page, phone["name"])
     SHOTS.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(SHOTS / f"board-{phone['name']}-{phone['layout']}-{w}x{h}.png"))
 
@@ -274,7 +285,10 @@ def _check_legends(page, g, phone):
     legs = page.evaluate("""() => [...document.querySelectorAll('.cab-board-lbl, .cab-board-sub, .cab-board-legend, .cab-board-face')]
         .filter(el => !el.hidden && el.offsetParent !== null && el.textContent.trim())
         .map(el => { const r = el.getBoundingClientRect(), ctl = el.closest('.cab-board-ctl');
+            const part = el.dataset.legend !== undefined ? null : el.classList.contains('cab-board-face') ? 'face'
+                : el.classList.contains('cab-board-sub') ? 'sub' : 'label';
             return {text: el.textContent.trim(), face: el.classList.contains('cab-board-face'),
+                    key: part ? `${ctl ? ctl.dataset.id : ''}:${part}` : `legend:${el.dataset.legend}`,
                     owner: ctl ? ctl.dataset.id : el.dataset.on || null, sec: el.closest('[data-sec]').dataset.sec,
                     l: r.left, t: r.top, r: r.right, b: r.bottom,
                     px: parseFloat(getComputedStyle(el).fontSize), over: el.scrollWidth - el.clientWidth}; })""")
@@ -293,7 +307,10 @@ def _check_legends(page, g, phone):
         assert a["over"] <= 1, f"{tag}: '{a['text']}' runs out of its box by {a['over']} px"
     if phone["layout"] not in ("panels", "phone"):
         return                                     # the old layouts keep their old crowding
-    shown = [a for a in legs if not a["face"]]
+    # the legends board-layout.test.js KNOWN_UNFIT lists (no clear room at
+    # 844 x 300 in the mixer and in the panels decks, short before Task V4)
+    known = KNOWN_UNFIT.get(f"{phone['layout']} {phone['w']}x{phone['h']}", ())
+    shown = [a for a in legs if not a["face"] and a["key"] not in known]
     for i, a in enumerate(shown):
         for b in shown[i + 1:]:
             ov = min(a["r"], b["r"]) - max(a["l"], b["l"]), min(a["b"], b["b"]) - max(a["t"], b["t"])
@@ -309,6 +326,54 @@ def _check_legends(page, g, phone):
             else:
                 hit = d["l"] < nx < d["r"] and d["t"] < ny < d["b"]
             assert not hit, f"{tag}: '{a['text']}' covers {cid}"
+
+
+def _check_deck_legends_inside(page, tag):
+    """Task V4: no legend on a phone deck's button is clipped. Each legend
+    printed on a button (its name, its face, its SHIFT legend, 1/2X and 2X):
+    its box inside the button's, and its text as the browser sets it (a Range
+    over its lines, so WebKit's own widths) no wider than the button's inside;
+    on a round button inside its disc. The mode row's names at 8 px or more."""
+    out = page.evaluate("""() => {
+        const res = [];
+        for (const el of document.querySelectorAll('.cab-board-sec-deck1 .cab-board-ctl, .cab-board-sec-deck2 .cab-board-ctl')) {
+            const id = el.dataset.id, b = el.getBoundingClientRect(), round = el.classList.contains('cab-look-round') || el.classList.contains('cab-look-big');
+            const legs = [...el.querySelectorAll(':scope > .cab-board-face, :scope > .cab-board-in')];
+            for (const s of document.querySelectorAll(`.cab-board-in[data-on='${id}']`)) legs.push(s);
+            for (const l of legs) {
+                if (l.hidden || !l.textContent.trim() || l.offsetParent === null) continue;
+                const r = l.getBoundingClientRect();
+                const range = document.createRange(); range.selectNodeContents(l);
+                const lines = [...range.getClientRects()].filter(q => q.width > 0.5);
+                const tl = Math.min(...lines.map(q => q.left)), tr = Math.max(...lines.map(q => q.right));
+                res.push({id, text: l.textContent.trim(), face: l.classList.contains('cab-board-face'), round,
+                    px: parseFloat(getComputedStyle(l).fontSize),
+                    b: {l: b.left, t: b.top, r: b.right, bt: b.bottom}, box: {l: r.left, t: r.top, r: r.right, b: r.bottom},
+                    text_l: tl, text_r: tr, text_h: lines.length ? Math.max(...lines.map(q => q.bottom)) - Math.min(...lines.map(q => q.top)) : 0});
+            }
+        }
+        return res;
+    }""")
+    assert len(out) >= 2 * 20, (tag, len(out))
+    for a in out:
+        b = a["b"]
+        what = f"{tag}: '{a['text']}' on {a['id']}"
+        # the box: a face's box is as wide as its button
+        assert b["t"] - 0.5 <= a["box"]["t"] and a["box"]["b"] <= b["bt"] + 0.5, f"{what}: box {a['box']} in {b}"
+        assert b["l"] - 0.5 <= a["box"]["l"] and a["box"]["r"] <= b["r"] + 0.5, f"{what}: box {a['box']} in {b}"
+        # the text as set: inside the bezel (1 px), centred
+        cx = (b["l"] + b["r"]) / 2
+        half = max(cx - a["text_l"], a["text_r"] - cx)
+        if a["round"]:
+            r = (b["r"] - b["l"]) / 2 - 1
+            cy = (b["t"] + b["bt"]) / 2
+            far = max(abs(a["box"]["t"] - cy), abs(a["box"]["b"] - cy))
+            room = (r * r - far * far) ** 0.5 if far < r else 0
+            assert half <= room + 0.75, f"{what}: text half-width {half:.1f} on a disc chord {room:.1f}"
+        else:
+            assert half <= (b["r"] - b["l"]) / 2 - 1 + 0.5, f"{what}: text {a['text_r'] - a['text_l']:.1f} wide on {b['r'] - b['l']:.1f}"
+        if a["id"][3:].startswith("mode-"):
+            assert a["px"] >= (8 if a["face"] else 7) - 0.01, f"{what} at {a['px']} px"
 
 
 @pytest.mark.parametrize("name", list(PHONES))
@@ -689,14 +754,16 @@ def test_panels_keep_caixa_rec_and_browse(name, chromium, webkit, base_url, auth
         ctx.close()
 
 
-# Task V3 (deck buttons bigger on mobile): per viewport, every deck hit zone,
-# drawn buttons (short side), CUE and PLAY, pads (short side), the jog. At
-# 844 x 390 the deck is too narrow for two of them (board-layout.test.js
-# phone_390_shortfalls_are_the_decks_width): the loop row's zones are a sixth
-# of the deck wide, the pads as wide as the deck leaves them.
+# Task V3 (deck buttons bigger on mobile), Task V4 (mode row and pads back
+# toward the FLX4): per viewport, every deck hit zone (the pads' and the mode
+# row's their own), drawn buttons (short side), CUE and PLAY, pads (short
+# side), the jog. At 844 x 390 the loop row's zones are a sixth of the deck
+# wide (board-layout.test.js phone_390_shortfalls_are_the_decks_width); at
+# 844 x 300 the jog is what gives.
 PHONE_TARGETS = {
-    "iphone-webkit": {"zone": 48, "loop_zone": 46, "button": 44, "cue": 52, "pad": 46, "jog": 100},
-    "iphone-safari-webkit": {"zone": 44, "loop_zone": 44, "button": 40, "cue": 46, "pad": 44, "jog": 88},
+    "iphone-webkit": {"zone": 48, "loop_zone": 46, "button": 44, "cue": 52, "pad": 40, "pad_zone": 40, "mode_zone": 32, "jog": 140},
+    "iphone-safari-webkit": {"zone": 44, "loop_zone": 44, "button": 40, "cue": 46, "pad": 36, "pad_zone": 40, "mode_zone": 32, "jog": 110},
+    "iphone-tabbar-webkit": {"zone": 44, "loop_zone": 44, "button": 40, "cue": 46, "pad": 36, "pad_zone": 40, "mode_zone": 32, "jog": 80},
 }
 LOOP_ROW = ("in", "out", "4beat", "call-prev", "call-next", "sync")
 
@@ -725,12 +792,14 @@ def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, aut
         for cid in small:
             e, d = ext[cid], g["drawn"][cid]
             part = cid[3:]
-            zw = target["loop_zone"] if part in LOOP_ROW else target["zone"]
-            assert e["l"] + e["r"] >= zw - 1 and e["t"] + e["b"] >= target["zone"] - 1, f"{name}: {cid} zone {e}"
+            pad = g["kinds"][cid] == "pad"
+            zw = target["loop_zone"] if part in LOOP_ROW else target["pad_zone"] if pad else target["zone"]
+            zh = target["pad_zone"] if pad else target["mode_zone"] if part.startswith("mode-") else target["zone"]
+            assert e["l"] + e["r"] >= zw - 1 and e["t"] + e["b"] >= zh - 1, f"{name}: {cid} zone {e}"
             # drawn, as the page lays it out
             bx = boxes[cid]
             short = min(bx["r"] - bx["l"], bx["b"] - bx["t"])
-            want = target["pad"] if g["kinds"][cid] == "pad" else target["cue"] if part in ("cue", "play") else target["button"]
+            want = target["pad"] if pad else target["cue"] if part in ("cue", "play") else 18 if part.startswith("mode-") else target["button"]
             assert short >= want - 0.6, f"{name}: {cid} drawn {short:.1f} px"
             # real taps 2 px inside each far edge
             for x, y in ((d["cx"] - e["l"] + 2, d["cy"]), (d["cx"] + e["r"] - 2, d["cy"]),
@@ -741,6 +810,13 @@ def test_phone_deck_zones_reach_the_target(name, chromium, webkit, base_url, aut
         for deck in (1, 2):
             j = boxes[f"d{deck}-jog"]
             assert j["r"] - j["l"] >= target["jog"] - 0.6 and abs((j["r"] - j["l"]) - (j["b"] - j["t"])) < 0.6, j
+            # Task V4: thin mode buttons over pads near square, PLAY's bottom on the pads'
+            p1, m1, play = boxes[f"d{deck}-pad1"], boxes[f"d{deck}-mode-hotcue"], boxes[f"d{deck}-play"]
+            ph, pw, mh = p1["b"] - p1["t"], p1["r"] - p1["l"], m1["b"] - m1["t"]
+            assert 1.0 - 0.02 <= pw / ph <= 1.25 + 0.02, (name, pw, ph)
+            assert mh <= max(0.5 * ph, 18) + 0.6, (name, mh, ph)
+            assert abs(play["b"] - boxes[f"d{deck}-pad5"]["b"]) < 0.6, (name, play, boxes[f"d{deck}-pad5"])
+        _check_deck_legends_inside(page, name)
         SHOTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(SHOTS / f"phone-deck-targets-{name}-{spec['w']}x{spec['h']}.png"))
         assert not page.errors, page.errors

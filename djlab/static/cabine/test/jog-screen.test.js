@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { fitBoard } from "../ui/board-layout.js";
 import assert from "node:assert/strict";
 
 import {
@@ -199,4 +200,16 @@ test("screen_plan_drops_from_the_end_when_the_jog_is_tiny", () => {
   const kept = PRIORITY.map((id) => p.shown.has(id));
   const firstOff = kept.indexOf(false);
   assert.ok(firstOff > 0 && kept.slice(firstOff).every((k) => !k), [...p.shown].join(","));
+});
+
+test("phone_jog_regains_lines_at_844x330", () => {
+  // Task V4: the mode row and the pads gave their height back to the jog, so in
+  // Safari's landscape (844 x 330) the display shows the tempo, SYNC / MASTER
+  // and the key again; at 844 x 390 everything
+  const iphone = { left: 47, right: 47, bottom: 21, top: 0 };
+  const at = (H) => screenPlan(fitBoard({ W: 844, H, insets: iphone }).deck.meta.jog, measure).shown;
+  for (const id of ["bpm", "time", "phase", "tempo", "tag", "key"]) assert.ok(at(330).has(id), `${id} at 844x330`);
+  for (const id of PRIORITY) assert.ok(at(390).has(id), `${id} at 844x390`);
+  // 844 x 300 (a browser's tab bar): the jog is what gives, BPM, time and phase stay
+  for (const id of ["bpm", "time", "phase"]) assert.ok(at(300).has(id), `${id} at 844x300`);
 });

@@ -159,6 +159,8 @@ const PHONES = [
   // iPhone landscape with its real insets; the same with env() = 0 (fallbacks); the Galaxy
   { W: 844, H: 390, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
   { W: 844, H: 390, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
+  // Task V4: a browser in landscape with its tab bar
+  { W: 844, H: 300, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
   { W: 760, H: 360, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
   { W: 1400, H: 900, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
 ];
@@ -237,7 +239,7 @@ test("tempo_fine_step_reaches_spec_resolution", () => {
   assert.equal(TEMPO_FINE_SCALE, 8, "never coarser than 1:8");
   const t = byId.get("d1-tempo");
   for (const mode of LAYOUTS) {
-    for (const ph of PHONES.slice(0, 3)) {
+    for (const ph of PHONES.filter((p) => p.W < 1000)) {
       const b = fitBoard({ ...ph, mode });
       const drawnT = placeControls(b).get("d1-tempo");
       const travel = drawnT.h - faderCap(b, t, drawnT).h;      // the drawn track

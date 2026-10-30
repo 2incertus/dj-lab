@@ -21,7 +21,7 @@ from playwright.sync_api import expect
 pytestmark = pytest.mark.usefixtures("play_tracks")
 
 SHOTS = Path.home() / "cabine-shots" / "task10"
-V2_SHOTS = Path.home() / "cabine-shots" / "v3"          # the phone layout's shots (v3 since Task V3)
+V2_SHOTS = Path.home() / "cabine-shots" / "v4"          # the phone layout's shots (v4 since Task V4)
 IPHONE_INSETS = {"left": 59, "right": 47, "bottom": 21}
 
 
@@ -481,7 +481,7 @@ def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
 
 @pytest.mark.parametrize("engine,layout,w,h", [
     ("chromium", "phone", 844, 390), ("webkit", "phone", 844, 390), ("webkit", "phone", 844, 330),
-    ("chromium", "phone", 760, 360), ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
+    ("webkit", "phone", 844, 300), ("chromium", "phone", 760, 360), ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
 def test_strip_layout_and_playing_screenshot(engine, layout, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """The band with two tracks loaded and playing: canvas, caixa at the left
     end, REC (live) at the right end, the waveform lanes between; the browse
@@ -595,14 +595,17 @@ def bright_pixels(page, j):
 
 
 # What the jog display keeps at each jog (Task V3: the jog gave its height to
-# the buttons; at 844 x 330 it is ~88 px and keeps BPM, time and phase).
+# the buttons, ~88 px at 844 x 330 with BPM, time and phase only; Task V4: the
+# mode row and the pads gave it back, ~114 px at 844 x 330; at 844 x 300 it
+# is ~84 px).
 JOG_SHOWS = {(844, 390): ("bpm", "time", "phase", "tempo", "tag", "key", "loop"),
-             (844, 330): ("bpm", "time", "phase"),
+             (844, 330): ("bpm", "time", "phase", "tempo", "tag", "key", "loop"),
+             (844, 300): ("bpm", "time", "phase"),
              (760, 360): ("bpm", "time", "phase", "tempo", "tag", "key", "loop")}
 
 
-@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("chromium", 844, 390),
-                                        ("chromium", 760, 360)])
+@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("webkit", 844, 300),
+                                        ("chromium", 844, 390), ("chromium", 760, 360)])
 def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """Two tracks playing, deck 2 synced to deck 1: both jog displays show the
     BPM, the remaining time and the phase meter, and where the jog has room
