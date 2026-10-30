@@ -363,18 +363,22 @@ function showBoard(opts = {}) {
   app.screen = "board";
   root.dataset.screen = "board";
   // "phone" by default; ?board=panels, ?board=spread or ?board=exact for comparison
-  const layout = opts.layout || new URLSearchParams(location.search).get("board") || undefined;
+  const q = new URLSearchParams(location.search);
+  const layout = opts.layout || q.get("board") || undefined;
+  // ?insets=iphone: the iPhone's safe areas where env() reads 0 (a desktop check);
+  // otherwise the real env() insets only (ruling R1-v4)
+  const insets = opts.insets || q.get("insets") || undefined;
   if (opts.demo) {
     const demo = makeDemoBindings();
     app.board = renderBoard(root, CONTROLS, demo.bindings, {
-      onCrate: () => showCrate(), onPadMode: demo.onPadMode, layout,
+      onCrate: () => showCrate(), onPadMode: demo.onPadMode, layout, insets,
     });
     demo.attach(app.board);
     app.boardLog = demo.log;
     return app.board;
   }
   const bind = bindingsOnce();
-  app.board = renderBoard(root, CONTROLS, bind.bindings, { onCrate: () => showCrate(), layout });
+  app.board = renderBoard(root, CONTROLS, bind.bindings, { onCrate: () => showCrate(), layout, insets });
   app.boardLog = bind.log;
   bind.resetLights();
   meterShown = [-1, -1];

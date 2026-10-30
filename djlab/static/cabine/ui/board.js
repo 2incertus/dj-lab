@@ -9,7 +9,8 @@
 //             the board's own ("board.*"). control carries deck, index, band,
 //             arg. Missing bindings are skipped. Task 10 binds the engine.
 //   opts      {onCrate(): the "caixa" button, onPadMode(deck, mode),
-//              layout: "phone" (default) | "panels" | "spread" | "exact" (ui/board-layout.js)}
+//              layout: "phone" (default) | "panels" | "spread" | "exact" (ui/board-layout.js),
+//              insets: "iphone" to keep the iPhone's safe areas where env() reads 0}
 //
 // The panel is drawn as its three sections (deck 1, mixer, deck 2), each a
 // positioned box; a control's x is relative to its section, so the layouts
@@ -450,7 +451,7 @@ export function renderBoard(root, controls = ALL_CONTROLS, bindings = {}, opts =
     // the same screen as last time: nothing moves (iOS fires resize often)
     const key = `${W}x${H} ${insets.left} ${insets.right} ${insets.top} ${insets.bottom}`;
     if (geo && geo.key === key) return;
-    const f = fitBoard({ W, H, insets, mode });
+    const f = fitBoard({ W, H, insets, mode, fallback: opts.insets === "iphone" });
     Object.assign(board.style, {
       left: `${f.left}px`, top: `${f.top}px`, width: `${f.width}px`, height: `${f.height}px`,
     });

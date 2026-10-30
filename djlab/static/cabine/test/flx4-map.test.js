@@ -10,7 +10,7 @@ import { MIXER_ACTIONS } from "../engine/mixer.js";
 import { BEATFX_ACTIONS } from "../engine/fx.js";
 import { SAMPLER_ACTIONS } from "../engine/sampler.js";
 import {
-  fitBoard, placeBox, sectionOf, placeControls, faderCap, LAYOUT, LAYOUTS, STRIP_SHARE, XFADER_CLEAR_PX, SAFE_FALLBACK,
+  fitBoard, placeBox, sectionOf, placeControls, faderCap, LAYOUT, LAYOUTS, STRIP_SHARE, XFADER_CLEAR_PX, SAFE_FALLBACK, EDGE_MIN,
 } from "../ui/board-layout.js";
 import { faderDelta, fineScale, TEMPO_FINE_SCALE } from "../ui/controls.js";
 
@@ -156,9 +156,13 @@ test("every_action_names_an_existing_method", () => {
 });
 
 const PHONES = [
-  // iPhone landscape with its real insets; the same with env() = 0 (fallbacks); the Galaxy
+  // iPhone landscape with its real insets; the same with env() = 0 and the
+  // fallback asked for (?insets=iphone); env() = 0 with no fallback (ruling
+  // R1-v4: Brave pads the safe area itself); the Galaxy
   { W: 844, H: 390, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
+  { W: 844, H: 390, insets: { left: 0, right: 0, bottom: 0, top: 0 }, fallback: true },
   { W: 844, H: 390, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
+  { W: 734, H: 308, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
   // Task V4: a browser in landscape with its tab bar
   { W: 844, H: 300, insets: { left: 47, right: 47, bottom: 21, top: 0 } },
   { W: 760, H: 360, insets: { left: 0, right: 0, bottom: 0, top: 0 } },
@@ -170,18 +174,19 @@ test("crossfader_clears_the_home_indicator_zone", () => {
   assert.equal(LAYOUT, "phone", "phone is the default (Cabine v2 V1b); panels, spread and exact stay for comparison");
   assert.ok(XFADER_CLEAR_PX >= 34);
   for (const mode of LAYOUTS) {
-    for (const { W, H, insets } of PHONES) {
-      const b = fitBoard({ W, H, insets, mode });
+    for (const { W, H, insets, fallback = false } of PHONES) {
+      const b = fitBoard({ W, H, insets, mode, fallback });
+      const least = fallback ? SAFE_FALLBACK : EDGE_MIN;
       const tag = `${mode} ${W}x${H}`;
       const x = placeBox(xf, b);
       assert.ok(x.top + x.height <= H - XFADER_CLEAR_PX + 1e-9, `${tag}: crossfader ends ${H - x.top - x.height} px above the edge`);
-      const L = Math.max(insets.left, SAFE_FALLBACK.side), R = Math.max(insets.right, SAFE_FALLBACK.side);
+      const L = Math.max(insets.left, least.side), R = Math.max(insets.right, least.side);
       assert.ok(b.left >= L - 1e-9 && b.left + b.width <= W - R + 1e-9, `${tag}: inside the side safe areas`);
       assert.ok(b.top >= b.stripBottom - 1e-9, `${tag}: below the strip`);
       if (mode === "panels") assert.equal(b.stripBottom, b.stripTop, `${tag}: no strip band`);
-      assert.ok(b.top + b.height <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-9, `${tag}: above the home bar`);
+      assert.ok(b.top + b.height <= H - Math.max(insets.bottom, least.bottom) + 1e-9, `${tag}: above the home bar`);
       if (mode === "phone") {
-        assert.equal(b.stripBottom - b.stripTop, Math.max(30, Math.round(0.1 * (H - Math.max(insets.bottom, SAFE_FALLBACK.bottom)))));
+        assert.equal(b.stripBottom - b.stripTop, Math.max(30, Math.round(0.1 * (H - Math.max(insets.bottom, least.bottom)))));
       } else {
         assert.equal(b.stripBottom - b.stripTop, Math.round(STRIP_SHARE[mode] * H));
       }
@@ -193,7 +198,7 @@ test("crossfader_clears_the_home_indicator_zone", () => {
         const s = b.sections.find((t) => t.key === d.section);
         assert.ok(d.x >= s.left - 1e-6 && d.x + d.w <= s.left + s.width + 1e-6, `${tag}: ${c.id} x inside its section`);
         assert.ok(d.y >= -1e-6 && d.y + d.h <= b.height + 1e-6, `${tag}: ${c.id} y inside its section`);
-        assert.ok(b.top + d.y + d.h <= H - Math.max(insets.bottom, SAFE_FALLBACK.bottom) + 1e-6, `${tag}: ${c.id} above the home bar`);
+        assert.ok(b.top + d.y + d.h <= H - Math.max(insets.bottom, least.bottom) + 1e-6, `${tag}: ${c.id} above the home bar`);
         if (mode === "phone") continue;          // phone re-solves the decks (test/board-layout.test.js)
         const p = placeBox(c, b);
         assert.ok(p.left >= b.left - 1e-6 && p.left + p.width <= b.left + b.width + 1e-6, `${tag}: ${c.id} x`);
@@ -214,7 +219,7 @@ test("crossfader_clears_the_home_indicator_zone", () => {
         assert.ok(Math.abs(secs[2].left + secs[2].width - b.width) < 1e-9, `${tag}: deck 2 at the right edge`);
         // inside a section, positions are the photo's (deck 1's pad 1 to its tempo)
         const pad = placeBox(byId.get("d1-pad1"), b), tempo = placeBox(byId.get("d1-tempo"), b);
-        const ex = fitBoard({ W, H, insets, mode: "exact" });
+        const ex = fitBoard({ W, H, insets, mode: "exact", fallback });
         const k = b.height / ex.height;
         const pe = placeBox(byId.get("d1-pad1"), ex), te = placeBox(byId.get("d1-tempo"), ex);
         assert.ok(Math.abs((tempo.left - pad.left) - k * (te.left - pe.left)) < 1e-6, `${tag}: deck geometry kept`);

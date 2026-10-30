@@ -4,10 +4,15 @@
 //
 // Landscape screen. Nothing interactive goes in the safe areas: the sides
 // (Dynamic Island, rounded corners) and the home indicator at the bottom.
-// env(safe-area-inset-*) gives them on the iPhone; where it reads 0 (Android,
-// desktop, the e2e browsers) SAFE_FALLBACK stands in, so the layout is the
-// iPhone's everywhere. The crossfader's box must end XFADER_CLEAR_PX above the
-// bottom edge (home indicator plus the swipe-up zone).
+// env(safe-area-inset-*) gives them on the iPhone. Where it reads 0 the
+// browser has already kept the page out of them (Brave on the iPhone pads the
+// safe area itself; Android letterboxes its cutout), so the board takes the
+// width, EDGE_MIN off each edge (ruling R1-v4: SAFE_FALLBACK on top of
+// Brave's own padding wasted ~94 px of his width). SAFE_FALLBACK (the
+// iPhone's insets) stands in only when asked for (fallback: ?insets=iphone,
+// for checking the iPhone layout in a desktop browser). The crossfader's box
+// must end XFADER_CLEAR_PX above the bottom edge (home indicator plus the
+// swipe-up zone).
 //
 // The panel is three sections side by side, as on the hardware: deck 1, the
 // mixer (with Beat FX and browse), deck 2 (SECTIONS, percent of the panel's
@@ -61,6 +66,8 @@ export const LAYOUT = "phone";
 export const LAYOUTS = ["phone", "panels", "spread", "exact"];
 export const STRIP_SHARE = { exact: 0.22, spread: 0.12, panels: 0, phone: 0.10 };
 export const SAFE_FALLBACK = { side: 47, bottom: 21 };
+/** Insets reading 0 and no fallback asked for: nothing interactive this close to an edge. */
+export const EDGE_MIN = { side: 8, bottom: 8 };
 export const XFADER_CLEAR_PX = 34;
 /** panels: the board's distance from the top edge (no strip above it). */
 export const PANELS_TOP_PX = 6;
@@ -104,17 +111,20 @@ export function sectionOf(x) {
  * @param W, H     viewport in CSS px (landscape)
  * @param insets   {left, right, bottom, top}: env(safe-area-inset-*) values
  * @param mode     "phone" (default) | "panels" | "spread" | "exact"
+ * @param fallback true: at least SAFE_FALLBACK (the iPhone's insets) where
+ *                 the insets read less; false (production): at least EDGE_MIN
  * @returns {mode, left, top, width, height, unit, sections: [{key, x0, x1, left, width}],
  *           stripTop, stripBottom, safe}; section left is relative to the board,
  *           unit = px per percent of the panel's height (a percent of its width
  *           is unit * BOARD_ASPECT px inside every section)
  */
-export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
+export function fitBoard({ W, H, insets = {}, mode = LAYOUT, fallback = false }) {
   if (!LAYOUTS.includes(mode)) throw new Error(`board layout ${mode}`);
+  const least = fallback ? SAFE_FALLBACK : EDGE_MIN;
   const safe = {
-    left: Math.max(insets.left || 0, SAFE_FALLBACK.side),
-    right: Math.max(insets.right || 0, SAFE_FALLBACK.side),
-    bottom: Math.max(insets.bottom || 0, SAFE_FALLBACK.bottom),
+    left: Math.max(insets.left || 0, least.side),
+    right: Math.max(insets.right || 0, least.side),
+    bottom: Math.max(insets.bottom || 0, least.bottom),
     top: Math.max(insets.top || 0, 0),
   };
   if (mode === "phone") return fitPhone(W, H, safe);

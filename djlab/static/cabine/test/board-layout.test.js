@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { CONTROLS, INDICATORS, LEGENDS } from "../flx4-map.js";
 import {
   fitBoard, placeControls, hitMap, edgeDistance, panelSlots, fitText, textWidth, legendPlan, LAYOUT, LAYOUTS, XFADER_CLEAR_PX,
-  SAFE_FALLBACK, HIT_MIN_PX, BUTTON_MIN_PX, KNOB_MIN_PX, PAD_GAP_PX, LEGEND_MIN_PX, PANELS_TOP_PX, BIG_KINDS, LEVER_MIN_PX,
+  SAFE_FALLBACK, EDGE_MIN, HIT_MIN_PX, BUTTON_MIN_PX, KNOB_MIN_PX, PAD_GAP_PX, LEGEND_MIN_PX, PANELS_TOP_PX, BIG_KINDS, LEVER_MIN_PX,
   PHONE, faderCap,
 } from "../ui/board-layout.js";
 
@@ -18,7 +18,12 @@ const VIEWPORTS = [
   // Task V4: a browser in landscape with its tab bar (the owner's screenshot)
   { W: 844, H: 300, insets: IPHONE, tag: "844x300" },
   { W: 760, H: 360, insets: {}, tag: "760x360" },
+  // ruling R1-v4: the owner's Brave on the iPhone (it pads the safe area
+  // itself, env() reads 0): the real insets only, the board takes the width
+  { W: 734, H: 308, insets: {}, tag: "734x308" },
 ];
+/** The least inset on each edge: EDGE_MIN, or SAFE_FALLBACK when asked for. */
+const least = (vp) => (vp.fallback ? SAFE_FALLBACK : EDGE_MIN);
 const EPS = 1e-6;
 
 const right = (r) => r.x + r.w;
@@ -36,7 +41,7 @@ function hitsShape(r, s) {
 const isBig = (c) => BIG_KINDS.includes(c.kind);
 
 function geometry(vp, mode = "panels") {
-  const fit = fitBoard({ W: vp.W, H: vp.H, insets: vp.insets, mode });
+  const fit = fitBoard({ W: vp.W, H: vp.H, insets: vp.insets, mode, fallback: !!vp.fallback });
   const drawn = placeControls(fit);
   const map = hitMap(fit, drawn);
   return { fit, drawn, map };
@@ -46,7 +51,7 @@ test("panels_spans_the_height", () => {
   assert.deepEqual([...LAYOUTS].sort(), ["exact", "panels", "phone", "spread"]);
   for (const vp of VIEWPORTS) {
     const { fit } = geometry(vp);
-    const L = Math.max(vp.insets.left || 0, SAFE_FALLBACK.side), R = Math.max(vp.insets.right || 0, SAFE_FALLBACK.side);
+    const L = Math.max(vp.insets.left || 0, least(vp).side), R = Math.max(vp.insets.right || 0, least(vp).side);
     assert.equal(fit.mode, "panels");
     assert.equal(fit.stripBottom - fit.stripTop, 0, `${vp.tag}: no strip band`);
     assert.ok(fit.top >= PANELS_TOP_PX - EPS, `${vp.tag}: top inset ${fit.top}`);
@@ -54,7 +59,7 @@ test("panels_spans_the_height", () => {
     const xf = byId.get("xfader");
     const xfBottom = fit.top + ((xf.y + xf.h) / 100) * fit.height;
     assert.ok(xfBottom <= vp.H - XFADER_CLEAR_PX + EPS, `${vp.tag}: crossfader clears`);
-    const bottomSafe = vp.H - Math.max(vp.insets.bottom || 0, SAFE_FALLBACK.bottom);
+    const bottomSafe = vp.H - Math.max(vp.insets.bottom || 0, least(vp).bottom);
     assert.ok(Math.abs(xfBottom - (vp.H - XFADER_CLEAR_PX)) < 0.5 || Math.abs(fit.top + fit.height - bottomSafe) < 0.5,
       `${vp.tag}: no wasted height`);
     assert.ok(Math.abs(fit.top - PANELS_TOP_PX) < 0.5 || fit.top + fit.height >= bottomSafe - 0.5, `${vp.tag}: board sits at the top`);
@@ -258,12 +263,15 @@ test("a_point_between_two_controls_goes_to_the_nearer", () => {
   }
 });
 
-/** 844 x 300 (Task V4's new viewport) is smaller than the mixer and the
- *  panels layout were made for; these legends find no clear room there at
- *  6 px (they were already short at 844 x 300 before Task V4, which changes
- *  only the phone decks): the crossfader marks 2 and 1&2 and SMART FADER's
- *  face in the phone mixer, the pad mode legends of the panels decks. */
+/** 844 x 300 and 734 x 308 (Task V4's new viewports) are smaller than the
+ *  mixer and the panels layout were made for; these legends find no clear
+ *  room there at 6 px (they were already short there before Task V4, which
+ *  changes only the phone decks): the crossfader marks 2 and 1&2 and SMART
+ *  FADER's face in the phone mixer, the pad mode legends of the panels decks. */
 const KNOWN_UNFIT = {
+  "phone 734x308": ["smart-fader:face"],
+  "panels 734x308": ["d1-sync:face", "d2-sync:face", "d1-mode-beatjump:face", "d2-mode-beatjump:face",
+    "d1-mode-sampler:face", "d2-mode-sampler:face"],
   "phone 844x300": ["legend:21", "legend:22", "smart-fader:face"],
   "panels 844x300": ["d1-mode-beatjump:sub", "d2-mode-beatjump:sub", "d1-sync:face", "d2-sync:face",
     ...[1, 2].flatMap((d) => ["hotcue", "beatjump", "sampler"].map((m) => `d${d}-mode-${m}:face`))],
@@ -336,13 +344,13 @@ test("phone_is_the_default_band_on_top_decks_widened_mixer_centred", () => {
   for (const vp of VIEWPORTS) {
     const { fit } = geometry(vp, "phone");
     const tag = vp.tag;
-    const usable = vp.H - Math.max(vp.insets.bottom || 0, SAFE_FALLBACK.bottom) - (vp.insets.top || 0);
+    const usable = vp.H - Math.max(vp.insets.bottom || 0, least(vp).bottom) - (vp.insets.top || 0);
     const band = fit.stripBottom - fit.stripTop;
     assert.ok(Math.abs(band - Math.max(30, Math.round(usable * 0.1))) < 1, `${tag}: band ${band}`);
     assert.ok(fit.top >= fit.stripBottom, `${tag}: the board under the band`);
     const xf = byId.get("xfader");
     assert.ok(fit.top + ((xf.y + xf.h) / 100) * fit.height <= vp.H - XFADER_CLEAR_PX + EPS, `${tag}: crossfader clears`);
-    const L = Math.max(vp.insets.left || 0, SAFE_FALLBACK.side), Rr = Math.max(vp.insets.right || 0, SAFE_FALLBACK.side);
+    const L = Math.max(vp.insets.left || 0, least(vp).side), Rr = Math.max(vp.insets.right || 0, least(vp).side);
     assert.ok(Math.abs(fit.left - L) < EPS && Math.abs(fit.width - (vp.W - L - Rr)) < EPS, `${tag}: full width`);
     const [d1, mx, d2] = fit.sections;
     // the mixer keeps the panel's proportions, centred; the decks take the rest, 6 px off it
@@ -582,7 +590,8 @@ test("phone_mode_row_is_thin_and_pads_follow_the_jog", () => {
       const g = (id) => drawn.get(`d${n}-${id}`);
       const tag = `${vp.tag} deck ${n}`;
       const pad = g("pad1"), jog = g("jog"), mode = g("mode-hotcue");
-      const padFloor = Math.max(T ? T.pad : 0, T ? T.padZone - PHONE.padGap / 2 - PHONE.edge : 0);
+      const tg = fit.deck.meta.targets;
+      const padFloor = Math.max(tg.pad, tg.padZone - PHONE.padGap / 2 - PHONE.edge);
       // pads about 0.30 of the jog, unless their floor holds them up
       assert.ok(pad.h <= Math.max(PAD_JOG * jog.w * 1.15, padFloor + EPS), `${tag}: pad ${pad.h.toFixed(1)} vs jog ${jog.w.toFixed(1)}`);
       if (pad.h > padFloor + 0.01) assert.ok(pad.h >= PAD_JOG * jog.w * 0.85, `${tag}: pad ${pad.h.toFixed(1)} vs jog ${jog.w.toFixed(1)}`);
@@ -646,4 +655,34 @@ test("phone_deck_legends_never_clip", () => {
       }
     }
   }
+});
+
+test("zero_insets_take_the_width_unless_the_fallback_is_asked_for", () => {
+  // ruling R1-v4: env() reading 0 means the browser already kept the page out
+  // of the safe areas (Brave pads them itself): the board goes to EDGE_MIN
+  // (8 px) off each side, not 47; SAFE_FALLBACK only when asked for
+  assert.ok(EDGE_MIN.side >= 8 && EDGE_MIN.bottom >= 8, "a small fixed margin");
+  for (const mode of LAYOUTS) {
+    const z = fitBoard({ W: 734, H: 308, insets: { left: 0, right: 0, bottom: 0, top: 0 }, mode });
+    assert.equal(z.safe.left, 8, mode);
+    assert.equal(z.safe.right, 8, mode);
+    assert.equal(z.safe.bottom, 8, mode);
+    if (mode !== "exact") assert.ok(Math.abs(z.left - 8) < EPS && Math.abs(z.width - (734 - 16)) < EPS, `${mode}: full width ${z.left} ${z.width}`);
+    const f = fitBoard({ W: 734, H: 308, insets: {}, mode, fallback: true });
+    assert.equal(f.safe.left, 47, `${mode}: the fallback when asked`);
+    assert.equal(f.safe.bottom, 21, `${mode}: the fallback when asked`);
+    // real insets win over both
+    const r = fitBoard({ W: 844, H: 390, insets: { left: 59, right: 59, bottom: 21 }, mode });
+    assert.equal(r.safe.left, 59, mode);
+    assert.equal(r.safe.bottom, 21, mode);
+  }
+  // the owner's phone: nothing interactive within 8 px of the left and right
+  // edges, the decks far wider than with the fallback on top of Brave's padding
+  const vp = { W: 734, H: 308, insets: {} };
+  const z = fitBoard({ ...vp, mode: "phone" }), f = fitBoard({ ...vp, mode: "phone", fallback: true });
+  const drawn = placeControls(z);
+  for (const [id, d] of drawn) {
+    assert.ok(z.left + d.x >= 8 - EPS && z.left + d.x + d.w <= 734 - 8 + EPS, `${id} off the side edges`);
+  }
+  assert.ok(z.sections[0].width >= f.sections[0].width + 35, `deck ${z.sections[0].width.toFixed(1)} vs ${f.sections[0].width.toFixed(1)}`);
 });

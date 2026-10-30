@@ -481,7 +481,8 @@ def test_gapless_guard_trims_a_padded_decode(proof_page, play_tracks):
 
 @pytest.mark.parametrize("engine,layout,w,h", [
     ("chromium", "phone", 844, 390), ("webkit", "phone", 844, 390), ("webkit", "phone", 844, 330),
-    ("webkit", "phone", 844, 300), ("chromium", "phone", 760, 360), ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
+    ("webkit", "phone", 844, 300), ("webkit", "phone", 734, 308), ("chromium", "phone", 760, 360),
+    ("chromium", "spread", 844, 390), ("webkit", "spread", 844, 390)])
 def test_strip_layout_and_playing_screenshot(engine, layout, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """The band with two tracks loaded and playing: canvas, caixa at the left
     end, REC (live) at the right end, the waveform lanes between; the browse
@@ -490,7 +491,8 @@ def test_strip_layout_and_playing_screenshot(engine, layout, w, h, chromium, web
     ctx = _context(browser, engine, w, h, auth_cookie)
     try:
         a, b = play_tracks["click128_130"], play_tracks["click131"]
-        insets = (IPHONE_INSETS if layout == "spread" else {"left": 47, "right": 47, "bottom": 21}) if engine == "webkit" else None
+        # (734 x 308: the owner's Brave, env() reads 0 and nothing is emulated, ruling R1-v4)
+        insets = (IPHONE_INSETS if layout == "spread" else {"left": 47, "right": 47, "bottom": 21}) if engine == "webkit" and w != 734 else None
         page = _open(ctx, base_url, carry=(a, b), insets=insets, layout=layout)
         r = load_both(page, a, b)
         box = page.evaluate("""() => { const q = (s) => document.querySelector(s).getBoundingClientRect();
@@ -601,10 +603,11 @@ def bright_pixels(page, j):
 JOG_SHOWS = {(844, 390): ("bpm", "time", "phase", "tempo", "tag", "key", "loop"),
              (844, 330): ("bpm", "time", "phase", "tempo", "tag", "key", "loop"),
              (844, 300): ("bpm", "time", "phase"),
+             (734, 308): ("bpm", "time", "phase"),
              (760, 360): ("bpm", "time", "phase", "tempo", "tag", "key", "loop")}
 
 
-@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("webkit", 844, 300),
+@pytest.mark.parametrize("engine,w,h", [("webkit", 844, 390), ("webkit", 844, 330), ("webkit", 844, 300), ("webkit", 734, 308),
                                         ("chromium", 844, 390), ("chromium", 760, 360)])
 def test_jog_displays_show_bpm_time_and_key(engine, w, h, chromium, webkit, base_url, auth_cookie, play_tracks):
     """Two tracks playing, deck 2 synced to deck 1: both jog displays show the

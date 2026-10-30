@@ -27,7 +27,7 @@ from playwright.sync_api import expect
 SHOTS = Path.home() / "cabine-shots" / "v4"
 XFADER_CLEAR_PX = 34
 # the iPhone's left inset when the Dynamic Island is on the left: more than the
-# 47 px fallback, so the test proves the inset is read, not just the fallback
+# 47 px fallback, so the test proves the inset is read
 IPHONE_INSETS = {"left": 59, "right": 47, "bottom": 21}
 
 PHONES = {
@@ -36,7 +36,12 @@ PHONES = {
     # Task V4: a browser in landscape with its tab bar (the owner's v3 screenshot)
     "iphone-tabbar-webkit": {"engine": "webkit", "w": 844, "h": 300, "insets": {"left": 47, "right": 47, "bottom": 21}},
     "galaxy-chromium": {"engine": "chromium", "w": 760, "h": 360, "insets": None},
+    # ruling R1-v4: the owner's Brave on the iPhone, which pads the safe area
+    # itself (env() reads 0): no emulated insets, the board takes the width
+    "iphone-brave-webkit": {"engine": "webkit", "w": 734, "h": 308, "insets": None},
 }
+# with no insets (env() reads 0) and no ?insets=iphone: this far off each edge
+EDGE_MIN = {"left": 8, "right": 8, "bottom": 8}
 PANELS_TOP_PX = 6
 # board-layout.test.js KNOWN_UNFIT: legends with no clear room at 844 x 300
 KNOWN_UNFIT = {
@@ -226,7 +231,7 @@ def _check_hittable(page, phone):
         return hit !== el.closest('[data-sec]');
     })""", ids)
     assert misses == [], f"centers that do not reach their own control: {misses}"
-    insets = phone["insets"] or {"left": 47, "right": 47, "bottom": 21}
+    insets = phone["insets"] or EDGE_MIN
     for cid, b in boxes.items():
         assert b["l"] >= insets["left"] - 0.5 and b["r"] <= w - insets["right"] + 0.5, f"{cid} in a side safe area"
         assert b["b"] <= h - insets["bottom"] + 0.5, f"{cid} in the home indicator zone"
@@ -956,3 +961,40 @@ def test_phone_knob_turns_from_its_rows_outer_end(ch, galaxy):
         entries = log(page)
         assert entries and {e["id"] for e in entries} == {cid} and entries[-1]["action"] == action, (cid, entries)
         assert entries[-1]["value"] > 0.5 + 30 / 180, entries[-1]
+
+
+@pytest.mark.parametrize("flag", [None, "iphone"])
+def test_zero_insets_take_the_width_unless_asked(flag, webkit, base_url, auth_cookie):
+    """Ruling R1-v4: where env(safe-area-inset-*) reads 0 (Brave on the iPhone
+    pads the safe area itself) the board takes the width, 8 px off each side
+    and nothing interactive closer to the edges; ?insets=iphone brings back the
+    iPhone's 47 / 21 px for a check in a desktop browser."""
+    ctx = _context(webkit, "webkit", 734, 308, auth_cookie)
+    try:
+        page = ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"{base_url}/cabine" + (f"?insets={flag}" if flag else ""))
+        page.wait_for_function("() => window.cabine && window.cabine.store")
+        page.evaluate("() => window.cabine.ready")
+        page.evaluate("() => window.cabine.showBoard({demo: true})")
+        page.wait_for_selector(".cab-board .cab-board-ctl", state="attached")
+        g = page.evaluate(GEO)
+        b = g["board"]
+        side, bottom = (47, 21) if flag else (8, 8)
+        assert abs(b["l"] - side) < 0.5 and abs(b["r"] - (734 - side)) < 0.5, (flag, b)
+        boxes = rects(page)
+        assert min(x["l"] for x in boxes.values()) >= side - 0.5 and max(x["r"] for x in boxes.values()) <= 734 - side + 0.5
+        assert max(x["b"] for x in boxes.values()) <= 308 - bottom + 0.5
+        # a tap 4 px from either side edge reaches no control
+        for x in (4, 730):
+            for y in range(40, 300, 10):
+                assert page.evaluate("([x, y]) => window.cabine.board.hitTest(x, y)", [x, y]) is None, (flag, x, y)
+        if not flag:
+            d1 = g["secs"]["deck1"]
+            assert d1["r"] - d1["l"] > 280, d1
+            SHOTS.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(SHOTS / "board-zero-insets-webkit-734x308.png"))
+        assert not errors, errors
+    finally:
+        ctx.close()
