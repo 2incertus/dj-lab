@@ -163,26 +163,44 @@ export function fitBoard({ W, H, insets = {}, mode = LAYOUT }) {
 //   the deck's right edge (the outer edge for deck 2), as on the hardware.
 // v3 ("deck buttons should be bigger on mobile"): no legend rows in a deck.
 // Every button's legends print on it (legendPlan, deckLegends), so the loop
-// row starts at the deck's top edge and the jog gives up the height the
-// buttons need (phoneTargets), down to its floor.
+// row starts at the deck's top edge.
+// v4 ("these buttons should be a bit smaller, more like original size"): the
+// mode row and the pads go back toward the FLX4's proportions and give their
+// height to the jog. On the photo a pad is 0.14 of the jog and a mode button
+// 0.35 of a pad; on a phone the pads aim at PHONE.padJog of the jog (never
+// under their floor, phoneTargets) and the mode buttons at PHONE.modePad of a
+// pad (never under what their name and SHIFT legend need). CUE and PLAY keep
+// their own size, no longer a pad row's height: SHIFT, CUE and PLAY stand on
+// their own rhythm in the left column, bottom-aligned with the pads.
 
 export const PHONE = {
   bandMin: 30, bandGap: 2, deckGap: 2,
   edge: 1, gap: 3, padGap: 4,
   tempoMin: 22, tempoMax: 30, tempoShare: 0.085,
-  jogShare: 0.44, padAspectMax: 1.4,
+  /** The jog's largest share of the deck's height (the photo's: 0.53). */
+  jogShare: 0.5,
+  /** Pads: about this share of the jog's diameter, at most this much wider than tall. */
+  padJog: 0.30, padAspectMax: 1.2,
+  /** Mode buttons: this share of a pad's height; their name never under modeMain px. */
+  modePad: 0.45, modeMain: 8,
   /** No legend in a phone deck is smaller than this. */
   legendMin: 7,
+  /** Between SHIFT and CUE, CUE and PLAY. */
+  columnGap: 4,
 };
+/** The least mode button: its name (modeMain) over its SHIFT legend
+ *  (legendMin), 1 px apart and 1 px inside the bezel. */
+PHONE.modeMin = 1 + PHONE.modeMain + 1 + PHONE.legendMin + 1;
 
-/** What a deck aims for, by its height: Safari with its bars (deck ~271 px
- *  tall at 844 x 330) to the installed app (~326 px at 844 x 390). button:
- *  every round button and the short side of SHIFT and the mode buttons; cue:
- *  CUE and PLAY; pad: a pad's short side; zone: every hit zone; jog: the jog's
- *  floor (it yields first, down to this). */
+/** What a deck aims for, by its height: a browser with its tab bar (deck
+ *  ~241 px tall at 844 x 300), Safari with its bars (~271 px at 844 x 330) to
+ *  the installed app (~326 px at 844 x 390). button: every round button and
+ *  the short side of SHIFT; cue: CUE and PLAY; zone: every hit zone but the
+ *  pads' and the mode row's; pad: a pad's least short side; padZone: a pad's
+ *  least hit zone; modeZone: the mode row's least zone height. */
 export function phoneTargets(deckH) {
   const t = Math.min(1, Math.max(0, (deckH - 270) / 56));
-  return { zone: 44 + 4 * t, button: 40 + 4 * t, cue: 46 + 6 * t, pad: 44 + 8 * t, jog: 88 + 12 * t };
+  return { zone: 44 + 4 * t, button: 40 + 4 * t, cue: 46 + 6 * t, pad: 36 + 4 * t, padZone: 40, modeZone: 32 };
 }
 
 function fitPhone(W, H, safe) {
@@ -212,89 +230,103 @@ function fitPhone(W, H, safe) {
 /**
  * One deck's parts for the phone layout, deck-relative px (deck 2 is the same
  * deck, as on the hardware).
- * Across: the left column (SHIFT, CUE, PLAY), the four pad columns, the tempo
- * fader. The column takes CUE's target while the pads keep a button's size and
- * 2 px; the pads take the rest; pads past their target give the tempo fader
- * back its share of the width.
+ * Across: the left column (SHIFT, CUE, PLAY) at CUE's target, the four pad
+ * columns, the tempo fader. The pads are as wide as the deck allows, but no
+ * wider than PHONE.padAspectMax times their height; width they leave goes to
+ * the tempo fader (up to its share), the rest either side of the pads.
  * Down: the loop row at the top edge (its buttons a sixth of the width at
- * most), the jog, the mode row, two pad rows. Each gap is the least that gives
- * the zones on either side their target height; pads are as tall as CUE and
- * PLAY need and their width allows; the jog takes the rest (round, at most
- * PHONE.jogShare of the height), and when that is under its floor the pads
- * give way first.
+ * most), the jog, the mode row, two pad rows. The gap under the loop row is
+ * the least that gives its zones their target height, the one over the mode
+ * row the least that gives the mode row its zone. The jog takes the rest
+ * (round, at most PHONE.jogShare of the height), the pads PHONE.padJog of it
+ * (never under their floor: their short side and their zone), the mode row
+ * PHONE.modePad of a pad (never under PHONE.modeMin). When the jog reaches its
+ * cap the pads grow back, up to square.
+ * The left column on its own: PLAY's bottom on the pads' bottom, CUE over it,
+ * SHIFT over CUE, PHONE.columnGap apart.
  * @returns {boxes: {[id without "dN-"]: {x, y, w, h, shape}}, legends: {[text]: {x, y, on?}}, meta}
  */
 export function phoneDeck(Wd, Hd) {
   const P = PHONE, tg = phoneTargets(Hd), g = DRAW_GAP_PX;
-  const btn = tg.button;                                      // SHIFT and the mode row
+  const btn = tg.button;                                      // SHIFT and the loop row
   // across
   const avail = Wd - 2 * P.edge - 2 * P.gap - 3 * P.padGap;
-  let T = P.tempoMin;
-  const keep = btn + 2;
-  const C = Math.max(btn, Math.min(tg.cue, avail - T - 4 * keep));
-  let pw = (avail - T - C) / 4;
-  if (pw > tg.pad) {
-    T = Math.min(P.tempoMax, Math.max(P.tempoMin, Wd * P.tempoShare), P.tempoMin + 4 * (pw - tg.pad));
-    pw = (avail - T - C) / 4;
-  }
-  const padsX = P.edge + C + P.gap;
-  const padsRight = padsX + 4 * pw + 3 * P.padGap;
-  const tempoX = Wd - P.edge - T;
-  // the loop row, evenly: IN and SYNC where sixths of the width put them,
-  // unless SYNC's centre is within 2 px of the tempo fader's left edge (a
-  // column too thin to tell apart): then 2 px left of it
-  const in0 = Wd / 12, even = (11 * Wd) / 12;
-  const sync0 = Math.abs(even - tempoX) < 2 ? tempoX - 2 : even;
-  const pitch = (sync0 - in0) / 5;
-  const loopX = [0, 1, 2, 3, 4, 5].map((i) => in0 + i * pitch);
-  const lb = Math.max(0, Math.min(btn, pitch - g));           // the loop row's buttons
-  const loopTop = P.edge, loopBottom = loopTop + lb;
-  const jcx = (P.edge + padsRight) / 2;
-  // down: the mode row's zone reaches halfway to the pads and up to the jog
-  const gm = Math.max(g, tg.zone - btn - P.padGap / 2);
-  const cueNeed = Math.min(C, tg.cue) - (P.padGap - g);      // CUE and PLAY: a pad row and a gap each
-  const ph0 = Math.max(cueNeed, Math.min(tg.pad, pw));
-  let ph = ph0;
-  const jogCapW = 2 * Math.min(jcx - P.edge, tempoX - g - jcx);
-  const jogCap = Math.min(jogCapW, P.jogShare * Hd);
-  // the loop row's zone reaches down to the jog's disc: the gap under the row
-  // is what the button nearest the jog's centre needs (iterated with D)
-  const nearest = Math.min(...loopX.map((x) => Math.abs(x - jcx)));
-  let D = 0, jl = g;
-  for (let k = 0; k < 6; k++) {
+  const C = Math.max(btn, Math.min(tg.cue, avail - P.tempoMin - 4 * (btn + 2)));
+  const pwMax = Math.max(0, (avail - P.tempoMin - C) / 4);  // the pads beside the narrowest tempo fader
+  const padFloor = Math.min(pwMax, Math.max(tg.pad, tg.padZone - P.padGap / 2 - P.edge));
+  let modeMin = P.modeMin;
+  const modeH = (ph) => Math.max(modeMin, P.modePad * ph);
+  // the mode row's zone reaches halfway to the pads and up to the jog's disc
+  const modeGap = (mh) => Math.max(g, tg.modeZone - mh - P.padGap / 2);
+  const across = (ph) => {
+    const pw = Math.min(pwMax, P.padAspectMax * ph);
+    const left = 4 * (pwMax - pw);                           // the width the pads leave
+    const T = Math.min(P.tempoMax, Math.max(P.tempoMin, Wd * P.tempoShare), P.tempoMin + left);
+    const side = (left - (T - P.tempoMin)) / 2;
+    const padsX = P.edge + C + P.gap + side;
+    return { pw, T, padsX, padsRight: padsX + 4 * pw + 3 * P.padGap, tempoX: Wd - P.edge - T };
+  };
+  let ph = padFloor, D = 0, jl = g, h = across(ph), lb = 0, loopX = [], pitch = 0, spare = 0, mh = modeH(ph), gm = modeGap(mh);
+  for (let pass = 0; pass < 8; pass++) {
+    h = across(ph);
+    modeMin = modeLegendHeight(h.pw);
+    // the loop row, evenly: IN and SYNC where sixths of the width put them,
+    // unless SYNC's centre is within 2 px of the tempo fader's left edge (a
+    // column too thin to tell apart): then 2 px left of it
+    const in0 = Wd / 12, even = (11 * Wd) / 12;
+    const sync0 = Math.abs(even - h.tempoX) < 2 ? h.tempoX - 2 : even;
+    pitch = (sync0 - in0) / 5;
+    loopX = [0, 1, 2, 3, 4, 5].map((i) => in0 + i * pitch);
+    lb = Math.max(0, Math.min(btn, pitch - g));
+    const loopBottom = P.edge + lb;
+    const jcx = (P.edge + h.padsRight) / 2;
+    const jogCap = Math.max(0, Math.min(2 * Math.min(jcx - P.edge, h.tempoX - g - jcx), P.jogShare * Hd));
+    // the loop row's zone reaches down to the jog's disc: the gap under the row
+    // is what the button nearest the jog's centre needs (with this D)
+    const nearest = Math.min(...loopX.map((x) => Math.abs(x - jcx)));
     const R = D / 2, dx = Math.min(nearest, R);
     const depth = R > 0 ? R - Math.sqrt(R * R - dx * dx) : 0;
     jl = Math.max(g, tg.zone - loopBottom - depth);
-    const fixed = loopBottom + jl + gm + btn + P.padGap + P.padGap + P.edge;
-    ph = ph0;
-    D = Math.max(0, Math.min(jogCap, Hd - fixed - 2 * ph));
-    if (D < tg.jog) {                                         // under the jog's floor: the pads give way
-      ph = Math.max(0, Math.min(ph0, (Hd - fixed - Math.min(tg.jog, jogCap)) / 2));
-      D = Math.max(0, Math.min(jogCap, Hd - fixed - 2 * ph));
+    const room = Hd - loopBottom - jl - 2 * P.padGap - P.edge;   // the jog, the mode row and its gap, the pads
+    const padsFor = (d) => Math.min(pwMax, Math.max(padFloor, P.padJog * d));
+    const need = (d, p) => d + modeGap(modeH(p)) + modeH(p) + 2 * p;
+    if (need(jogCap, padsFor(jogCap)) <= room) {
+      // the jog at its cap: the pads grow back, up to square
+      D = jogCap;
+      const fill = (p) => need(D, p) <= room;
+      ph = growMax(padsFor(D), Math.max(padsFor(D), pwMax), fill);
+    } else {
+      // the largest jog whose pads (and mode row) still fit; at 0 the pads give way
+      D = growMax(0, jogCap, (d) => need(d, padsFor(d)) <= room);
+      ph = padsFor(D);
+      if (need(D, ph) > room) ph = growMax(0, ph, (p) => need(0, p) <= room);
     }
+    mh = modeH(ph);
+    gm = modeGap(mh);
+    spare = Math.max(0, room - need(D, ph));
   }
-  const fixed = loopBottom + jl + gm + btn + P.padGap + P.padGap + P.edge;
-  // the jog at its cap: the pads grow back (as square as their width allows)
-  if (Hd - fixed - D - 2 * ph > 0) ph = Math.min(Math.max(ph, pw / P.padAspectMax, Math.min(pw, (Hd - fixed - D) / 2)), (Hd - fixed - D) / 2);
-  const spare = Math.max(0, Hd - fixed - D - 2 * ph);
+  const { pw, T, padsX, padsRight, tempoX } = h;
+  const loopTop = P.edge, loopBottom = loopTop + lb;
+  const jcx = (P.edge + padsRight) / 2;
   const jogY = loopBottom + jl + spare / 2;
   const modeY = jogY + D + gm + spare / 2;
-  const padY = modeY + btn + P.padGap;
+  const padY = modeY + mh + P.padGap;
   const b = {};
   const circle = (cx, cy, d) => ({ x: cx - d / 2, y: cy - d / 2, w: d, h: d, shape: "circle" });
   LOOP_ROW.forEach((id, i) => { b[id] = circle(loopX[i], loopTop + lb / 2, lb); });
   b.jog = circle(jcx, jogY + D / 2, D);
   ["hotcue", "padfx1", "beatjump", "sampler"].forEach((m, i) => {
-    b[`mode-${m}`] = { x: padsX + i * (pw + P.padGap), y: modeY, w: pw, h: btn, shape: "rect" };
+    b[`mode-${m}`] = { x: padsX + i * (pw + P.padGap), y: modeY, w: pw, h: mh, shape: "rect" };
   });
   for (let i = 0; i < 8; i++) {
     b[`pad${i + 1}`] = { x: padsX + (i % 4) * (pw + P.padGap), y: padY + Math.floor(i / 4) * (ph + P.padGap), w: pw, h: ph, shape: "rect" };
   }
-  // CUE and PLAY: one per pad row, a pad row and a gap tall at most
-  const cueD = Math.min(C, ph + P.padGap - g);
-  b.shift = { x: P.edge, y: modeY, w: C, h: btn, shape: "rect" };
-  b.cue = circle(P.edge + C / 2, padY + ph / 2, cueD);
-  b.play = circle(P.edge + C / 2, padY + ph + P.padGap + ph / 2, cueD);
+  // the left column, bottom-aligned with the pads: PLAY, CUE over it, SHIFT over CUE
+  const padsBottom = padY + 2 * ph + P.padGap;
+  const cueD = C, colX = P.edge + C / 2;
+  b.play = circle(colX, padsBottom - cueD / 2, cueD);
+  b.cue = circle(colX, b.play.y - P.columnGap - cueD / 2, cueD);
+  b.shift = { x: P.edge, y: b.cue.y - P.columnGap - btn, w: C, h: btn, shape: "rect" };
   // the tempo fader: under SYNC (its zone's height apart) to the deck's bottom, at its right edge
   const tTop = loopBottom + Math.max(g, tg.zone - loopBottom);
   const tBottom = Hd - P.edge;
@@ -311,15 +343,32 @@ export function phoneDeck(Wd, Hd) {
     "1/2X": { x: cx(b["call-prev"]), y: loopTop + lb * 0.75, on: "call-prev" },
     "2X": { x: cx(b["call-next"]), y: loopTop + lb * 0.75, on: "call-next" },
     // the tempo marks in the fader's left tick column
-    "\u2212": { x: b.tempo.x + 4.5, y: b.tempo.y + capH / 2, tick: true },
+    "−": { x: b.tempo.x + 4.5, y: b.tempo.y + capH / 2, tick: true },
     "0": { x: b.tempo.x + 4.5, y: b.tempo.y + b.tempo.h / 2, tick: true },
     "+": { x: b.tempo.x + 4.5, y: tBottom - capH / 2, tick: true },
   };
   return { boxes: b, legends, tempoCap: { w: T, h: capH },
-    meta: { targets: tg, jog: D, pad: { w: pw, h: ph }, column: C, tempo: T, button: btn, loopButton: lb, pitch, spare } };
+    meta: { targets: tg, jog: D, pad: { w: pw, h: ph }, mode: mh, column: C, cue: cueD, tempo: T, button: btn, loopButton: lb, pitch, spare } };
 }
 
 const LOOP_ROW = ["in", "out", "4beat", "call-prev", "call-next", "sync"];
+
+/** The least height (from PHONE.modeMin, half px steps) at which every mode
+ *  button w px wide holds its name at PHONE.modeMain px or more over its SHIFT
+ *  legend (short forms allowed): a name that must break onto two lines makes
+ *  the row taller. */
+const MODE_BUTTONS = CONTROLS.filter((c) => c.deck === 1 && c.look === "mode");
+const modeHeights = new Map();
+function modeLegendHeight(w) {
+  const key = Math.round(w * 100);
+  if (modeHeights.has(key)) return modeHeights.get(key);
+  let h = PHONE.modeMin;
+  const fits = (hh) => MODE_BUTTONS.every((c) => onButton({ x: 0, y: 0, w, h: hh }, false,
+    { main: c.face, bottom: { text: c.sub }, base: PHONE.modeMain, mainMin: PHONE.modeMain }).fits);
+  while (h < 3 * PHONE.modeMin && !fits(h)) h += 0.5;
+  modeHeights.set(key, h);
+  return h;
+}
 
 /** A fader's cap in px for its drawn box d: the photo's cap scaled with the
  *  box, or (phone decks) the tempo cap phoneDeck chose. */
@@ -818,7 +867,7 @@ function captionForms(slot) {
  * does, the one with the biggest main legend.
  * @returns {top, main, bottom} each {text, lines, px, x, y, w, h} | null, fits
  */
-export function onButton(d, round, { top = null, main, bottom = null, base, floorBase = base, min = PHONE.legendMin }) {
+export function onButton(d, round, { top = null, main, bottom = null, base, floorBase = base, min = PHONE.legendMin, mainMin = min }) {
   const cx = d.x + d.w / 2, cy = d.y + d.h / 2;
   const ri = d.w / 2 - 1;                          // inside the bezel's 1 px ring
   const lineOk = (w, y0, y1) => {
@@ -826,7 +875,7 @@ export function onButton(d, round, { top = null, main, bottom = null, base, floo
     const far = Math.max(Math.abs(y0), Math.abs(y1));
     return far < ri && w <= 2 * Math.sqrt(ri * ri - far * far) - 1 + 1e-9;
   };
-  const floor = Math.min(base, Math.max(min + 1, MAIN_FLOOR * floorBase));
+  const floor = Math.min(base, Math.max(mainMin + 1, MAIN_FLOOR * floorBase));
   const better = (a, b) => {
     const okA = a.px >= floor - 1e-9, okB = b.px >= floor - 1e-9;
     if (okA !== okB) return okA;
@@ -841,7 +890,7 @@ export function onButton(d, round, { top = null, main, bottom = null, base, floo
         for (const bf of captionForms(bottom)) {
           const cost = mf.cost + (tf ? tf.cost : 0) + (bf ? bf.cost : 0);
           const capT = tf && tf.text ? min : 0, capB = bf && bf.text ? min : 0;
-          for (let px = base; px >= min - 1e-9; px -= 0.25) {
+          for (let px = base; px >= mainMin - 1e-9; px -= 0.25) {
             const H = (capT ? capT + lg : 0) + mf.lines.length * px + (capB ? capB + lg : 0);
             let y = -H / 2;
             const rows = [];
@@ -873,11 +922,11 @@ export function onButton(d, round, { top = null, main, bottom = null, base, floo
   // nothing fits: the shortest forms at the smallest size, stacked from the centre
   const sh = (slot) => (slot ? [slot.text, ...(ON_SHORT[slot.text] || [])].at(-1) : null);
   const m = mainForms(main).at(-1).lines;
-  const mw = Math.max(...m.map((t) => textWidth(t, min)));
-  const y0 = cy - (m.length * min) / 2;
+  const mw = Math.max(...m.map((t) => textWidth(t, mainMin)));
+  const y0 = cy - (m.length * mainMin) / 2;
   const cap = (t, y) => (t ? { text: t, lines: [t], px: min, x: cx - textWidth(t, min) / 2, y, w: textWidth(t, min), h: min } : null);
-  return { fits: false, top: cap(sh(top), y0 - min), bottom: cap(sh(bottom), y0 + m.length * min),
-    main: { text: m.join(" "), lines: m, px: min, x: cx - mw / 2, y: y0, w: mw, h: m.length * min } };
+  return { fits: false, top: cap(sh(top), y0 - min), bottom: cap(sh(bottom), y0 + m.length * mainMin),
+    main: { text: m.join(" "), lines: m, px: mainMin, x: cx - mw / 2, y: y0, w: mw, h: m.length * mainMin } };
 }
 
 const NUDGE = [0, 2, -2, 4, -4, 6, -6, 8, -8];
@@ -999,11 +1048,16 @@ export function legendPlan(fit, drawn, controls = CONTROLS) {
       const free = freeOn.get(c.id);
       const main = c.face || c.label;
       const top = c.face && c.label ? { text: c.label } : null;
-      const bottom = free !== undefined ? { text: LEGENDS[free].text } : c.sub && !c.subPlain && works(c)
+      // (the mode row keeps every SHIFT legend: its height is made for them, Task V4)
+      const bottom = free !== undefined ? { text: LEGENDS[free].text } : c.sub && !c.subPlain && (works(c) || c.look === "mode")
         ? { text: c.sub } : c.sub && !c.subPlain ? { text: c.sub, optional: true } : null;
       const short = Math.min(d.w, d.h);
-      const base = Math.max(L, Math.min(14, short * 0.28));
-      return onButton(d, isRound(c), { top, main, bottom, base: Math.min(base, cap), floorBase: base });
+      // the thin mode buttons (Task V4): the name at PHONE.modeMain px or more,
+      // as big as the room over its SHIFT legend allows
+      const mode = c.look === "mode";
+      const base = mode ? Math.max(PHONE.modeMain, Math.min(11, d.h - 3 - L)) : Math.max(L, Math.min(14, short * 0.28));
+      return onButton(d, isRound(c), { top, main, bottom, base: Math.max(mode ? PHONE.modeMain : 0, Math.min(base, cap)), floorBase: base,
+        mainMin: mode ? PHONE.modeMain : L });
     };
     const firstPass = new Map();
     for (const c of controls) if (phoneDeck(c) && c.kind === "button") firstPass.set(c.id, fitOn(c, Infinity));
